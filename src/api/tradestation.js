@@ -1,10 +1,16 @@
 /**
+ * ============================================================
  * TradeStation API Integration Service
- * Handles:
- * - OAuth
- * - Token persistence
- * - REST requests
- * - Market data streaming
+ * ============================================================
+ *
+ * Responsibilities:
+ *   1. OAuth (authorization + refresh)
+ *   2. Token persistence
+ *   3. REST requests
+ *   4. Market data (historical + streaming)
+ *   5. Order execution
+ *   6. Broker state queries (positions)
+ * ============================================================
  */
 
 const axios = require('axios');
@@ -27,6 +33,9 @@ class TradeStationAPI {
     this.loadTokens();
   }
 
+  // ============================================================
+  // TOKEN MANAGEMENT
+  // ============================================================
   loadTokens() {
     if (!fs.existsSync(TOKEN_PATH)) return;
 
@@ -56,6 +65,9 @@ class TradeStationAPI {
     );
   }
 
+  // ============================================================
+  // OAUTH FLOW
+  // ============================================================
   getAuthorizationUrl() {
     const scopes = 'openid offline_access MarketData ReadAccount Trade';
     return `https://signin.tradestation.com/authorize?response_type=code&client_id=${this.apiKey}&redirect_uri=${encodeURIComponent(
@@ -104,6 +116,9 @@ class TradeStationAPI {
     console.log('🔄 Token refreshed');
   }
 
+  // ============================================================
+  // TOKEN VALIDATION
+  // ============================================================
   async ensureValidToken() {
     if (!this.accessToken) {
       throw new Error('Not authenticated');
@@ -118,6 +133,9 @@ class TradeStationAPI {
     }
   }
 
+  // ============================================================
+  // CORE REST REQUEST HELPER
+  // ============================================================
   async makeRequest(method, endpoint, data) {
     await this.ensureValidToken();
 
@@ -130,7 +148,19 @@ class TradeStationAPI {
 
     return res.data;
   }
+  async getOpenPositions(accountId) {
+    const data = await this.makeRequest(
+      'GET',
+      `/brokerage/accounts/${accountId}/positions`
+    );
 
+    if (!data || !data.Positions) return [];
+
+    return data.Positions;
+  }
+  // ============================================================
+  // MARKET DATA (HISTORICAL)
+  // ============================================================
   async getHistoricalBars(symbol, interval, unit, barsBack) {
     return this.makeRequest(
       'GET',
@@ -138,6 +168,9 @@ class TradeStationAPI {
     );
   }
 
+  // ============================================================
+  // MARKET DATA (STREAMING)
+  // ============================================================
   async streamBars(symbol, interval, onBar) {
     await this.ensureValidToken();
 
@@ -194,6 +227,9 @@ class TradeStationAPI {
     connect();
   }
 
+  // ============================================================
+  // ORDER EXECUTION
+  // ============================================================
   async placeMarketOrder(accountId, symbol, qty, side) {
     return this.makeRequest('POST', '/orderexecution/orders', {
       AccountID: accountId,
@@ -203,6 +239,16 @@ class TradeStationAPI {
       TradeAction: side === 'LONG' ? 'BUY' : 'SELL',
       TimeInForce: { Duration: 'DAY' }
     });
+  }
+  // ============================================================
+  // BROKER STATE (POSITIONS)
+  // ============================================================
+
+  async getOpenPositions(accountId) {
+    return this.makeRequest(
+      'GET',
+      `/brokerage/accounts/${accountId}/positions`
+    );
   }
 }
 

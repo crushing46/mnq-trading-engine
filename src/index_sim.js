@@ -259,7 +259,48 @@ app.get('/', async (req, res) => {
 async function startBot() {
   try {
     await tsApi.ensureValidToken();
+    
     console.log('✅ Authenticated with TradeStation');
+
+    // ============================================================
+    // BROKER POSITION SYNC (Startup Reconciliation)
+    // ============================================================
+    try {
+      const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+
+      const positions = brokerData?.Positions || brokerData || [];
+
+      const mnqPosition = positions.find(
+        (p) =>
+          p.Symbol === CONFIG.symbol &&
+          Number(p.Quantity) !== 0
+      );
+
+      if (mnqPosition) {
+        const qty = Number(mnqPosition.Quantity);
+        const side = qty > 0 ? 'LONG' : 'SHORT';
+
+        position = {
+          side,
+          entryPrice: Number(mnqPosition.AveragePrice),
+          stopLoss: null,
+          takeProfit: null,
+          qty: Math.abs(qty),
+          entryTime: new Date(),
+          beAdjusted: false,
+          maxFavorable: 0,
+          maxAdverse: 0
+        };
+
+        console.log(
+          `🔄 Synced broker position: ${side} ${Math.abs(qty)} @ ${mnqPosition.AveragePrice}`
+        );
+      } else {
+        console.log('🟢 No open broker position detected — starting flat');
+      }
+    } catch (err) {
+      console.error('⚠️ Failed to sync broker positions:', err.message);
+    }
   } catch {
     console.log('\n🔐 AUTHORIZATION REQUIRED\n');
     console.log('Open this URL in your browser:\n');
