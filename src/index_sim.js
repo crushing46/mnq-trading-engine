@@ -22,7 +22,8 @@ const CONFIG = {
   enableTrading: process.env.ENABLE_TRADING === 'true',
   trailRunner: process.env.TRAIL_RUNNER === 'true',
   trailDistance: Number(process.env.TRAIL_DISTANCE || 20),
-  accountId: process.env.ACCOUNT_ID
+  accountId: process.env.ACCOUNT_ID,
+  maxDailyLoss: Number(process.env.MAX_DAILY_LOSS || 0)
 };
 
 console.log('🔧 CONFIG:', CONFIG);
@@ -55,6 +56,115 @@ const strategy = new TradingStrategy({
 
 // ================= POSITION =================
 let position = null;
+
+let dailyPnL = 0;
+let consecutiveLosses = 0;
+let tradingDisabled = false;
+let currentTradeDate = null;
+
+const journalPath = path.join(__dirname, 'trades.csv');
+const sessionLogPath = path.join(__dirname, 'session_log.csv');
+
+function logSessionSummary(date) {
+  const summary = `${date},${dailyPnL},${consecutiveLosses}\n`;
+
+  if (!fs.existsSync(sessionLogPath)) {
+    fs.writeFileSync(
+      sessionLogPath,
+      'date,totalPnL,consecutiveLossesAtClose\n'
+    );
+  }
+
+  fs.appendFileSync(sessionLogPath, summary);
+  console.log('📊 Session summary logged');
+}
+
+function resetDailyPnLIfNewDay(date) {
+  const tradeDate = date.toISOString().split('T')[0];
+
+  if (currentTradeDate !== tradeDate) {
+    currentTradeDate = tradeDate;
+    dailyPnL = 0;
+    console.log(`📅 New Trading Day: ${tradeDate} | Reset Daily PnL`);
+  }
+}
+
+async function logTrade(entry, exit, reason) {
+  const pnl =
+    entry.side === 'LONG'
+      ? exit.price - entry.entryPrice
+      : entry.entryPrice - exit.price;
+
+  const tradeQty = exit.qty || entry.qty;
+  dailyPnL += pnl * tradeQty;
+
+  if (pnl < 0) {
+    consecutiveLosses += 1;
+  } else {
+    consecutiveLosses = 0;
+  }
+
+  // Hard Daily Loss Shutdown (Force Flatten)
+  if (
+    CONFIG.maxDailyLoss > 0 &&
+    dailyPnL <= -CONFIG.maxDailyLoss
+  ) {
+    console.log(
+      `🛑 HARD DAILY LOSS LIMIT HIT ($${CONFIG.maxDailyLoss}) — EMERGENCY FLATTEN`
+    );
+
+    tradingDisabled = true;
+
+    if (position && CONFIG.enableTrading) {
+      try {
+        const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+        const positions = brokerData?.Positions || brokerData || [];
+
+        const livePos = positions.find(
+          (p) => p.Symbol === CONFIG.symbol
+        );
+
+        const liveQty = livePos ? Number(livePos.Quantity) : 0;
+
+        if (liveQty !== 0) {
+          const flattenSide = liveQty > 0 ? 'SHORT' : 'LONG';
+
+          await tsApi.placeMarketOrder(
+            CONFIG.accountId,
+            CONFIG.symbol,
+            Math.abs(liveQty),
+            flattenSide
+          );
+
+          console.log('🚨 Emergency flatten order sent');
+        }
+
+        position = null;
+      } catch (err) {
+        console.error('⚠️ Emergency flatten failed:', err.message);
+      }
+    }
+  }
+
+  // 3 consecutive loss shutdown
+  if (consecutiveLosses >= 3) {
+    tradingDisabled = true;
+    console.log('🛑 3 CONSECUTIVE LOSSES — TRADING DISABLED');
+  }
+
+  const row = `${new Date().toISOString()},${entry.side},${entry.entryPrice},${exit.price},${reason},${pnl * tradeQty},${dailyPnL}\n`;
+
+  if (!fs.existsSync(journalPath)) {
+    fs.writeFileSync(
+      journalPath,
+      'timestamp,side,entry,exit,reason,pnl,dailyPnL\n'
+    );
+  }
+
+  fs.appendFileSync(journalPath, row);
+
+  console.log(`📒 Trade Logged | Qty: ${tradeQty} | PnL: ${pnl * tradeQty} | Daily: ${dailyPnL}`);
+}
 
 let formingBar = null;
 let lastFinalizedMinute = null;
@@ -134,6 +244,47 @@ async function handleStreamBar(tick) {
       volume: formingBar.volume
     };
 
+    resetDailyPnLIfNewDay(closedBar.time);
+
+    const hour = closedBar.time.getHours();
+    const minute = closedBar.time.getMinutes();
+
+    if (hour === 15 && minute >= 50 && position) {
+      console.log('⏰ 3:50 PM CT — AUTO FLATTEN');
+
+      if (CONFIG.enableTrading) {
+        // Pre-order verification
+        const verifyData = await tsApi.getOpenPositions(CONFIG.accountId);
+        const verifyPositions = verifyData?.Positions || verifyData || [];
+        const verifyPos = verifyPositions.find(
+          (p) => p.Symbol === CONFIG.symbol
+        );
+
+        const verifyQty = verifyPos ? Number(verifyPos.Quantity) : 0;
+
+        if (Math.abs(verifyQty) !== Math.abs(position?.qty || 0)) {
+          console.log('⚠️ Pre-order verification failed — position changed. Skipping order.');
+          return;
+        }
+
+        await tsApi.placeMarketOrder(
+          CONFIG.accountId,
+          CONFIG.symbol,
+          position.qty,
+          position.side === 'LONG' ? 'SHORT' : 'LONG'
+        );
+      }
+
+      await logTrade(position, { price: closedBar.close }, 'EOD_FLATTEN');
+
+      logSessionSummary(closedBar.time.toISOString().split('T')[0]);
+      tradingDisabled = false;
+      consecutiveLosses = 0;
+
+      position = null;
+      return;
+    }
+
     const local = closedBar.time.toLocaleString('en-US', {
       timeZone: 'America/Chicago',
       hour12: true
@@ -145,41 +296,317 @@ async function handleStreamBar(tick) {
 
     strategy.addBar(closedBar);
 
-    // ---- EXIT CHECK ----
+    // ============================================================
+    // REAL-TIME DAILY LOSS CHECK (REALIZED + UNREALIZED)
+    // ============================================================
     if (position) {
-      const slCheck = strategy.checkExitSignal(
+      const unrealizedMove =
         position.side === 'LONG'
-          ? closedBar.low
-          : closedBar.high,
-        position
-      );
+          ? closedBar.close - position.entryPrice
+          : position.entryPrice - closedBar.close;
 
-      const tpCheck = strategy.checkExitSignal(
-        position.side === 'LONG'
-          ? closedBar.high
-          : closedBar.low,
-        position
-      );
+      // Calculate unrealized based on ACTIVE LEGS only
+      const unrealizedPnL = position.legs
+        .filter(l => l.active)
+        .reduce((sum, leg) => sum + (unrealizedMove * leg.qty), 0);
 
-      const finalExit = slCheck || tpCheck;
+      const totalDailyExposure = dailyPnL + unrealizedPnL;
 
-      if (finalExit) {
+      if (
+        CONFIG.maxDailyLoss > 0 &&
+        totalDailyExposure <= -CONFIG.maxDailyLoss &&
+        !tradingDisabled
+      ) {
         console.log(
-          `🚪 EXIT ${finalExit.reason} | Price=${finalExit.price}`
+          `🚨 REAL-TIME DAILY LOSS BREACH ($${CONFIG.maxDailyLoss}) — FORCING FLATTEN`
         );
 
+        tradingDisabled = true;
+
         if (CONFIG.enableTrading) {
-          await tsApi.placeMarketOrder(
-            CONFIG.accountId,
-            CONFIG.symbol,
-            position.qty,
-            position.side === 'LONG' ? 'SHORT' : 'LONG'
-          );
+          try {
+            const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+            const positions = brokerData?.Positions || brokerData || [];
+
+            const livePos = positions.find(
+              (p) => p.Symbol === CONFIG.symbol
+            );
+
+            const liveQty = livePos ? Number(livePos.Quantity) : 0;
+
+            if (liveQty !== 0) {
+              const flattenSide = liveQty > 0 ? 'SHORT' : 'LONG';
+
+              await tsApi.placeMarketOrder(
+                CONFIG.accountId,
+                CONFIG.symbol,
+                Math.abs(liveQty),
+                flattenSide
+              );
+
+              console.log('🚨 Real-time emergency flatten order sent');
+            }
+          } catch (err) {
+            console.error('⚠️ Real-time flatten failed:', err.message);
+          }
         }
 
         position = null;
         return;
       }
+    }
+
+    // ============================================================
+    // LIVE BROKER RECONCILIATION (Pre-Exit Safety Check)
+    // ============================================================
+    if (position) {
+      try {
+        const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+        const positions = brokerData?.Positions || brokerData || [];
+
+        const livePos = positions.find(
+          (p) =>
+            p.Symbol === CONFIG.symbol &&
+            Number(p.Quantity) !== 0
+        );
+
+        if (!livePos) {
+          console.log('⚠️ Broker shows FLAT — clearing internal position');
+          position = null;
+        } else {
+          const liveQty = Number(livePos.Quantity);
+          const liveSide = liveQty > 0 ? 'LONG' : 'SHORT';
+
+          if (
+            liveSide !== position.side ||
+            Math.abs(liveQty) !== position.qty
+          ) {
+            console.log('🔄 Broker position mismatch — resyncing');
+
+            const entryPrice = Number(livePos.AveragePrice);
+
+            position = {
+              side: liveSide,
+              entryPrice,
+              qty: Math.abs(liveQty),
+              entryTime: new Date(),
+              legs: [
+                {
+                  id: 'fixed',
+                  qty: 1,
+                  takeProfit:
+                    liveSide === 'LONG'
+                      ? entryPrice + CONFIG.tp
+                      : entryPrice - CONFIG.tp,
+                  stopLoss:
+                    liveSide === 'LONG'
+                      ? entryPrice - CONFIG.sl
+                      : entryPrice + CONFIG.sl,
+                  active: true
+                },
+                {
+                  id: 'runner',
+                  qty: Math.abs(liveQty) - 1,
+                  stopLoss:
+                    liveSide === 'LONG'
+                      ? entryPrice - CONFIG.sl
+                      : entryPrice + CONFIG.sl,
+                  trailing: false,
+                  active: Math.abs(liveQty) > 1
+                }
+              ],
+              beAdjusted: false,
+              maxFavorable: 0,
+              maxAdverse: 0
+            };
+          }
+        }
+      } catch (err) {
+        console.error('⚠️ Broker reconciliation failed:', err.message);
+      }
+    }
+
+    // ---- PROFESSIONAL LEG-BASED EXIT CHECK ----
+    if (position) {
+
+      for (const leg of position.legs) {
+        if (!leg.active) continue;
+
+        const hitTP =
+          leg.takeProfit &&
+          (
+            (position.side === 'LONG' && closedBar.high >= leg.takeProfit) ||
+            (position.side === 'SHORT' && closedBar.low <= leg.takeProfit)
+          );
+
+        const hitSL =
+          (position.side === 'LONG' && closedBar.low <= leg.stopLoss) ||
+          (position.side === 'SHORT' && closedBar.high >= leg.stopLoss);
+
+        // === TAKE PROFIT ===
+        if (hitTP) {
+          console.log(`🎯 ${leg.id.toUpperCase()} TP HIT`);
+
+          if (CONFIG.enableTrading) {
+            await tsApi.placeMarketOrder(
+              CONFIG.accountId,
+              CONFIG.symbol,
+              leg.qty,
+              position.side === 'LONG' ? 'SHORT' : 'LONG'
+            );
+          }
+
+          leg.active = false;
+
+          // Activate runner trailing after fixed TP
+          if (leg.id === 'fixed') {
+            const runner = position.legs.find(l => l.id === 'runner');
+            if (runner && runner.active && CONFIG.trailRunner) {
+              runner.trailing = true;
+              console.log('🏃 Runner trailing activated');
+            }
+          }
+
+          await logTrade(position, { price: leg.takeProfit, qty: leg.qty }, `${leg.id}_TP`);
+        }
+
+        // === STOP LOSS ===
+        if (hitSL) {
+          console.log(`🛑 ${leg.id.toUpperCase()} SL HIT`);
+
+          if (CONFIG.enableTrading) {
+            await tsApi.placeMarketOrder(
+              CONFIG.accountId,
+              CONFIG.symbol,
+              leg.qty,
+              position.side === 'LONG' ? 'SHORT' : 'LONG'
+            );
+          }
+
+          leg.active = false;
+
+          await logTrade(position, { price: leg.stopLoss, qty: leg.qty }, `${leg.id}_SL`);
+        }
+
+        // === TRAILING LOGIC (RUNNER ONLY) ===
+        if (leg.id === 'runner' && leg.trailing && leg.active) {
+          if (position.side === 'LONG') {
+            const newStop = closedBar.close - CONFIG.trailDistance;
+            if (newStop > leg.stopLoss) leg.stopLoss = newStop;
+          } else {
+            const newStop = closedBar.close + CONFIG.trailDistance;
+            if (newStop < leg.stopLoss) leg.stopLoss = newStop;
+          }
+        }
+      }
+
+      // If all legs inactive → clear position
+      const stillActive = position.legs.some(l => l.active);
+      if (!stillActive) {
+        console.log('📦 All legs closed — clearing position');
+        position = null;
+        return;
+      }
+    }
+
+    // ---- FLIP CHECK (TARGET POSITION BASED) ----
+    if (position) {
+      const flipSignal = strategy.checkEntrySignal();
+
+      if (
+        flipSignal &&
+        flipSignal.type &&
+        flipSignal.type !== position.side
+      ) {
+        console.log(
+          `🔁 FLIP SIGNAL | ${position.side} → ${flipSignal.type} (TARGET MODE)`
+        );
+
+        // Determine desired target position
+        const desiredQty =
+          flipSignal.type === 'LONG'
+            ? CONFIG.qty
+            : -CONFIG.qty;
+
+        // Query current broker position
+        const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+        const positions = brokerData?.Positions || brokerData || [];
+
+        const currentPos = positions.find(
+          (p) => p.Symbol === CONFIG.symbol
+        );
+
+        const currentQty = currentPos ? Number(currentPos.Quantity) : 0;
+
+        const orderSize = desiredQty - currentQty;
+
+        if (orderSize !== 0 && CONFIG.enableTrading) {
+          const side = orderSize > 0 ? 'LONG' : 'SHORT';
+
+          // Pre-order verification
+          const verifyData = await tsApi.getOpenPositions(CONFIG.accountId);
+          const verifyPositions = verifyData?.Positions || verifyData || [];
+          const verifyPos = verifyPositions.find(
+            (p) => p.Symbol === CONFIG.symbol
+          );
+
+          const verifyQty = verifyPos ? Number(verifyPos.Quantity) : 0;
+
+          if (Math.abs(verifyQty) !== Math.abs(position?.qty || 0)) {
+            console.log('⚠️ Pre-order verification failed — position changed. Skipping order.');
+            return;
+          }
+
+          await tsApi.placeMarketOrder(
+            CONFIG.accountId,
+            CONFIG.symbol,
+            Math.abs(orderSize),
+            side
+          );
+        }
+
+        position = {
+          side: flipSignal.type,
+          entryPrice: closedBar.close,
+          entryTime: closedBar.time,
+          qty: CONFIG.qty,
+          legs: [
+            {
+              id: 'fixed',
+              qty: 1,
+              takeProfit:
+                flipSignal.type === 'LONG'
+                  ? closedBar.close + CONFIG.tp
+                  : closedBar.close - CONFIG.tp,
+              stopLoss:
+                flipSignal.type === 'LONG'
+                  ? closedBar.close - CONFIG.sl
+                  : closedBar.close + CONFIG.sl,
+              active: true
+            },
+            {
+              id: 'runner',
+              qty: CONFIG.qty - 1,
+              stopLoss:
+                flipSignal.type === 'LONG'
+                  ? closedBar.close - CONFIG.sl
+                  : closedBar.close + CONFIG.sl,
+              trailing: false,
+              active: CONFIG.qty > 1
+            }
+          ],
+          beAdjusted: false,
+          maxFavorable: 0,
+          maxAdverse: 0
+        };
+
+        return;
+      }
+    }
+
+    if (tradingDisabled) {
+      console.log('🛑 Trading disabled for session');
+      return;
     }
 
     if (!position) {
@@ -192,22 +619,79 @@ async function handleStreamBar(tick) {
           `📈 ENTRY SIGNAL | Side=${rawSignal.type} | Entry=${entryPrice}`
         );
 
-        if (CONFIG.enableTrading) {
+        // Determine desired target
+        const desiredQty =
+          rawSignal.type === 'LONG'
+            ? CONFIG.qty
+            : -CONFIG.qty;
+
+        // Query broker
+        const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+        const positions = brokerData?.Positions || brokerData || [];
+
+        const currentPos = positions.find(
+          (p) => p.Symbol === CONFIG.symbol
+        );
+
+        const currentQty = currentPos ? Number(currentPos.Quantity) : 0;
+
+        const orderSize = desiredQty - currentQty;
+
+        if (orderSize !== 0 && CONFIG.enableTrading) {
+          const side = orderSize > 0 ? 'LONG' : 'SHORT';
+
+          // Pre-order verification
+          const verifyData = await tsApi.getOpenPositions(CONFIG.accountId);
+          const verifyPositions = verifyData?.Positions || verifyData || [];
+          const verifyPos = verifyPositions.find(
+            (p) => p.Symbol === CONFIG.symbol
+          );
+
+          const verifyQty = verifyPos ? Number(verifyPos.Quantity) : 0;
+
+          if (Math.abs(verifyQty) !== Math.abs(position?.qty || 0)) {
+            console.log('⚠️ Pre-order verification failed — position changed. Skipping order.');
+            return;
+          }
+
           await tsApi.placeMarketOrder(
             CONFIG.accountId,
             CONFIG.symbol,
-            CONFIG.qty,
-            rawSignal.type
+            Math.abs(orderSize),
+            side
           );
         }
 
         position = {
           side: rawSignal.type,
           entryPrice,
-          stopLoss: rawSignal.stopLoss,
-          takeProfit: rawSignal.takeProfit,
-          qty: CONFIG.qty,
           entryTime: closedBar.time,
+          qty: CONFIG.qty,
+          legs: [
+            {
+              id: 'fixed',
+              qty: 1,
+              takeProfit:
+                rawSignal.type === 'LONG'
+                  ? entryPrice + CONFIG.tp
+                  : entryPrice - CONFIG.tp,
+              stopLoss:
+                rawSignal.type === 'LONG'
+                  ? entryPrice - CONFIG.sl
+                  : entryPrice + CONFIG.sl,
+              active: true
+            },
+            {
+              id: 'runner',
+              qty: CONFIG.qty - 1,
+              stopLoss:
+                rawSignal.type === 'LONG'
+                  ? entryPrice - CONFIG.sl
+                  : entryPrice + CONFIG.sl,
+              trailing: false,
+              active: CONFIG.qty > 1
+            }
+          ],
           beAdjusted: false,
           maxFavorable: 0,
           maxAdverse: 0
@@ -280,13 +764,38 @@ async function startBot() {
         const qty = Number(mnqPosition.Quantity);
         const side = qty > 0 ? 'LONG' : 'SHORT';
 
+        const entryPrice = Number(mnqPosition.AveragePrice);
+
         position = {
           side,
-          entryPrice: Number(mnqPosition.AveragePrice),
-          stopLoss: null,
-          takeProfit: null,
+          entryPrice,
           qty: Math.abs(qty),
           entryTime: new Date(),
+          legs: [
+            {
+              id: 'fixed',
+              qty: 1,
+              takeProfit:
+                side === 'LONG'
+                  ? entryPrice + CONFIG.tp
+                  : entryPrice - CONFIG.tp,
+              stopLoss:
+                side === 'LONG'
+                  ? entryPrice - CONFIG.sl
+                  : entryPrice + CONFIG.sl,
+              active: true
+            },
+            {
+              id: 'runner',
+              qty: Math.abs(qty) - 1,
+              stopLoss:
+                side === 'LONG'
+                  ? entryPrice - CONFIG.sl
+                  : entryPrice + CONFIG.sl,
+              trailing: false,
+              active: Math.abs(qty) > 1
+            }
+          ],
           beAdjusted: false,
           maxFavorable: 0,
           maxAdverse: 0

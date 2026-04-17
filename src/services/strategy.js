@@ -33,7 +33,7 @@ class TradingStrategy {
     this.prevEmaSlow = null;
 
     this.pendingSignal = null;
-    this.maxConfirmationBars = config.maxConfirmationBars ?? 5;
+    this.maxConfirmationBars = config.maxConfirmationBars ?? 2;
 
     this.bars = [];
     this.maxBars = 1000;
