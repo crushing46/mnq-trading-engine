@@ -148,16 +148,6 @@ class TradeStationAPI {
 
     return res.data;
   }
-  async getOpenPositions(accountId) {
-    const data = await this.makeRequest(
-      'GET',
-      `/brokerage/accounts/${accountId}/positions`
-    );
-
-    if (!data || !data.Positions) return [];
-
-    return data.Positions;
-  }
   // ============================================================
   // MARKET DATA (HISTORICAL)
   // ============================================================
@@ -248,6 +238,17 @@ class TradeStationAPI {
     return this.makeRequest(
       'GET',
       `/brokerage/accounts/${accountId}/positions`
+    );
+  }
+
+  // ============================================================
+  // BROKER STATE (BALANCES / PnL)
+  // ============================================================
+
+  async getAccountBalances(accountId) {
+    return this.makeRequest(
+      'GET',
+      `/brokerage/accounts/${accountId}/balances`
     );
   }
 }

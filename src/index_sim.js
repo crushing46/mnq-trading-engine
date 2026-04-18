@@ -57,7 +57,8 @@ const strategy = new TradingStrategy({
 // ================= POSITION =================
 let position = null;
 
-let dailyPnL = 0;
+let dailyPnL = 0; // broker-reported realized PnL
+let brokerUnrealizedPnL = 0; // broker-reported unrealized PnL
 let consecutiveLosses = 0;
 let tradingDisabled = false;
 let currentTradeDate = null;
@@ -84,8 +85,10 @@ function resetDailyPnLIfNewDay(date) {
 
   if (currentTradeDate !== tradeDate) {
     currentTradeDate = tradeDate;
-    dailyPnL = 0;
     console.log(`📅 New Trading Day: ${tradeDate} | Reset Daily PnL`);
+    tradingDisabled = false;
+    consecutiveLosses = 0;
+    console.log('🔄 Daily PnL reset | Trading re-enabled | Consecutive losses reset');
   }
 }
 
@@ -96,7 +99,6 @@ async function logTrade(entry, exit, reason) {
       : entry.entryPrice - exit.price;
 
   const tradeQty = exit.qty || entry.qty;
-  dailyPnL += pnl * tradeQty;
 
   if (pnl < 0) {
     consecutiveLosses += 1;
@@ -278,8 +280,8 @@ async function handleStreamBar(tick) {
       await logTrade(position, { price: closedBar.close }, 'EOD_FLATTEN');
 
       logSessionSummary(closedBar.time.toISOString().split('T')[0]);
-      tradingDisabled = false;
-      consecutiveLosses = 0;
+      tradingDisabled = true;
+      console.log('🛑 Trading disabled for session');
 
       position = null;
       return;
@@ -297,63 +299,66 @@ async function handleStreamBar(tick) {
     strategy.addBar(closedBar);
 
     // ============================================================
-    // REAL-TIME DAILY LOSS CHECK (REALIZED + UNREALIZED)
+    // BROKER-REPORTED DAILY LOSS CHECK (REALIZED + UNREALIZED)
     // ============================================================
-    if (position) {
-      const unrealizedMove =
-        position.side === 'LONG'
-          ? closedBar.close - position.entryPrice
-          : position.entryPrice - closedBar.close;
+    try {
+      const balances = await tsApi.getAccountBalances(CONFIG.accountId);
 
-      // Calculate unrealized based on ACTIVE LEGS only
-      const unrealizedPnL = position.legs
-        .filter(l => l.active)
-        .reduce((sum, leg) => sum + (unrealizedMove * leg.qty), 0);
+      // Adjust these field names if TradeStation returns different keys
+      dailyPnL = Number(
+        balances?.Balances?.DayTradeProfitLoss ??
+        balances?.DayTradeProfitLoss ??
+        0
+      );
 
-      const totalDailyExposure = dailyPnL + unrealizedPnL;
+      brokerUnrealizedPnL = Number(
+        balances?.Balances?.OpenTradeProfitLoss ??
+        balances?.OpenTradeProfitLoss ??
+        0
+      );
+
+      const totalExposure = dailyPnL + brokerUnrealizedPnL;
 
       if (
         CONFIG.maxDailyLoss > 0 &&
-        totalDailyExposure <= -CONFIG.maxDailyLoss &&
+        totalExposure <= -CONFIG.maxDailyLoss &&
         !tradingDisabled
       ) {
         console.log(
-          `🚨 REAL-TIME DAILY LOSS BREACH ($${CONFIG.maxDailyLoss}) — FORCING FLATTEN`
+          `🚨 BROKER DAILY LOSS BREACH ($${CONFIG.maxDailyLoss}) — FORCING FLATTEN`
         );
 
         tradingDisabled = true;
 
         if (CONFIG.enableTrading) {
-          try {
-            const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
-            const positions = brokerData?.Positions || brokerData || [];
+          const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
+          const positions = brokerData?.Positions || brokerData || [];
 
-            const livePos = positions.find(
-              (p) => p.Symbol === CONFIG.symbol
+          const livePos = positions.find(
+            (p) => p.Symbol === CONFIG.symbol
+          );
+
+          const liveQty = livePos ? Number(livePos.Quantity) : 0;
+
+          if (liveQty !== 0) {
+            const flattenSide = liveQty > 0 ? 'SHORT' : 'LONG';
+
+            await tsApi.placeMarketOrder(
+              CONFIG.accountId,
+              CONFIG.symbol,
+              Math.abs(liveQty),
+              flattenSide
             );
 
-            const liveQty = livePos ? Number(livePos.Quantity) : 0;
-
-            if (liveQty !== 0) {
-              const flattenSide = liveQty > 0 ? 'SHORT' : 'LONG';
-
-              await tsApi.placeMarketOrder(
-                CONFIG.accountId,
-                CONFIG.symbol,
-                Math.abs(liveQty),
-                flattenSide
-              );
-
-              console.log('🚨 Real-time emergency flatten order sent');
-            }
-          } catch (err) {
-            console.error('⚠️ Real-time flatten failed:', err.message);
+            console.log('🚨 Broker-based emergency flatten sent');
           }
         }
 
         position = null;
         return;
       }
+    } catch (err) {
+      console.error('⚠️ Failed to fetch broker balances:', err.message);
     }
 
     // ============================================================
@@ -599,7 +604,9 @@ async function handleStreamBar(tick) {
           maxFavorable: 0,
           maxAdverse: 0
         };
-
+        console.log(
+          `📈 FLIP ENTRY EXECUTED | Side=${flipSignal.type} | Entry=${closedBar.close} | TP=${flipSignal.type === 'LONG' ? closedBar.close + CONFIG.tp : closedBar.close - CONFIG.tp} | SL=${flipSignal.type === 'LONG' ? closedBar.close - CONFIG.sl : closedBar.close + CONFIG.sl} | TargetQty=${CONFIG.qty}`
+        );
         return;
       }
     }
@@ -616,7 +623,7 @@ async function handleStreamBar(tick) {
         const entryPrice = closedBar.close;
 
         console.log(
-          `📈 ENTRY SIGNAL | Side=${rawSignal.type} | Entry=${entryPrice}`
+          `📈 ENTRY SIGNAL | Side=${rawSignal.type} | Entry=${entryPrice} | TP=${rawSignal.type === 'LONG' ? entryPrice + CONFIG.tp : entryPrice - CONFIG.tp} | SL=${rawSignal.type === 'LONG' ? entryPrice - CONFIG.sl : entryPrice + CONFIG.sl}`
         );
 
         // Determine desired target
@@ -803,6 +810,17 @@ async function startBot() {
 
         console.log(
           `🔄 Synced broker position: ${side} ${Math.abs(qty)} @ ${mnqPosition.AveragePrice}`
+        );
+        console.log(
+          `📌 SYNCED POSITION LEVELS | TP=${
+            side === 'LONG'
+              ? entryPrice + CONFIG.tp
+              : entryPrice - CONFIG.tp
+          } | SL=${
+            side === 'LONG'
+              ? entryPrice - CONFIG.sl
+              : entryPrice + CONFIG.sl
+          }`
         );
       } else {
         console.log('🟢 No open broker position detected — starting flat');
