@@ -192,10 +192,6 @@ async function onTick(tick) {
         position.side === 'LONG'
           ? position.entryPrice + 2
           : position.entryPrice - 2;
-
-      if (leg.id === 'runner') {
-        leg.trailing = CONFIG.trailRunner;
-      }
     }
 
     position.beAdjusted = true;
@@ -382,10 +378,7 @@ async function handleStreamBar(tick) {
           const liveQty = Number(livePos.Quantity);
           const liveSide = liveQty > 0 ? 'LONG' : 'SHORT';
 
-          if (
-            liveSide !== position.side ||
-            Math.abs(liveQty) !== position.qty
-          ) {
+          if (liveSide !== position.side) {
             console.log('🔄 Broker position mismatch — resyncing');
 
             const entryPrice = Number(livePos.AveragePrice);
@@ -395,6 +388,7 @@ async function handleStreamBar(tick) {
               entryPrice,
               qty: Math.abs(liveQty),
               entryTime: new Date(),
+              expectedQty: Math.abs(liveQty),
               legs: [
                 {
                   id: 'fixed',
@@ -420,97 +414,50 @@ async function handleStreamBar(tick) {
                   active: Math.abs(liveQty) > 1
                 }
               ],
+              // NOTE: expectedQty tracks live broker qty to prevent false resyncs on partial exits
               beAdjusted: false,
               maxFavorable: 0,
               maxAdverse: 0
             };
           }
+          else {
+            // 🔄 Sync entry price with broker (handles slippage / partial fills)
+            const brokerEntry = Number(livePos.AveragePrice);
+
+            if (Math.abs(brokerEntry - position.entryPrice) > 0.01) {
+              console.log(`🔄 Syncing entry price | Old=${position.entryPrice} New=${brokerEntry}`);
+
+              position.entryPrice = brokerEntry;
+
+              // Recalculate TP/SL for all legs
+              for (const leg of position.legs) {
+                if (position.side === 'LONG') {
+                  if (leg.id === 'fixed') {
+                    leg.takeProfit = brokerEntry + CONFIG.tp;
+                  }
+                  leg.stopLoss = brokerEntry - CONFIG.sl;
+                } else {
+                  if (leg.id === 'fixed') {
+                    leg.takeProfit = brokerEntry - CONFIG.tp;
+                  }
+                  leg.stopLoss = brokerEntry + CONFIG.sl;
+                }
+              }
+
+              console.log(`📌 Updated levels | TP=${
+                position.side === 'LONG'
+                  ? brokerEntry + CONFIG.tp
+                  : brokerEntry - CONFIG.tp
+              } | SL=${
+                position.side === 'LONG'
+                  ? brokerEntry - CONFIG.sl
+                  : brokerEntry + CONFIG.sl
+              }`);
+            }
+          }
         }
       } catch (err) {
         console.error('⚠️ Broker reconciliation failed:', err.message);
-      }
-    }
-
-    // ---- PROFESSIONAL LEG-BASED EXIT CHECK ----
-    if (position) {
-
-      for (const leg of position.legs) {
-        if (!leg.active) continue;
-
-        const hitTP =
-          leg.takeProfit &&
-          (
-            (position.side === 'LONG' && closedBar.high >= leg.takeProfit) ||
-            (position.side === 'SHORT' && closedBar.low <= leg.takeProfit)
-          );
-
-        const hitSL =
-          (position.side === 'LONG' && closedBar.low <= leg.stopLoss) ||
-          (position.side === 'SHORT' && closedBar.high >= leg.stopLoss);
-
-        // === TAKE PROFIT ===
-        if (hitTP) {
-          console.log(`🎯 ${leg.id.toUpperCase()} TP HIT`);
-
-          if (CONFIG.enableTrading) {
-            await tsApi.placeMarketOrder(
-              CONFIG.accountId,
-              CONFIG.symbol,
-              leg.qty,
-              position.side === 'LONG' ? 'SHORT' : 'LONG'
-            );
-          }
-
-          leg.active = false;
-
-          // Activate runner trailing after fixed TP
-          if (leg.id === 'fixed') {
-            const runner = position.legs.find(l => l.id === 'runner');
-            if (runner && runner.active && CONFIG.trailRunner) {
-              runner.trailing = true;
-              console.log('🏃 Runner trailing activated');
-            }
-          }
-
-          await logTrade(position, { price: leg.takeProfit, qty: leg.qty }, `${leg.id}_TP`);
-        }
-
-        // === STOP LOSS ===
-        if (hitSL) {
-          console.log(`🛑 ${leg.id.toUpperCase()} SL HIT`);
-
-          if (CONFIG.enableTrading) {
-            await tsApi.placeMarketOrder(
-              CONFIG.accountId,
-              CONFIG.symbol,
-              leg.qty,
-              position.side === 'LONG' ? 'SHORT' : 'LONG'
-            );
-          }
-
-          leg.active = false;
-
-          await logTrade(position, { price: leg.stopLoss, qty: leg.qty }, `${leg.id}_SL`);
-        }
-
-        // === TRAILING LOGIC (RUNNER ONLY) ===
-        if (leg.id === 'runner' && leg.trailing && leg.active) {
-          if (position.side === 'LONG') {
-            const newStop = closedBar.close - CONFIG.trailDistance;
-            if (newStop > leg.stopLoss) leg.stopLoss = newStop;
-          } else {
-            const newStop = closedBar.close + CONFIG.trailDistance;
-            if (newStop < leg.stopLoss) leg.stopLoss = newStop;
-          }
-        }
-      }
-
-      // If all legs inactive → clear position
-      const stillActive = position.legs.some(l => l.active);
-      if (!stillActive) {
-        console.log('📦 All legs closed — clearing position');
-        position = null;
-        return;
       }
     }
 
@@ -556,9 +503,10 @@ async function handleStreamBar(tick) {
           );
 
           const verifyQty = verifyPos ? Number(verifyPos.Quantity) : 0;
-
-          if (Math.abs(verifyQty) !== Math.abs(position?.qty || 0)) {
-            console.log('⚠️ Pre-order verification failed — position changed. Skipping order.');
+          console.log(`🔍 VERIFY CHECK | BrokerQty=${verifyQty} | LocalQty=${position?.qty || 0}`);
+          // Only block if we currently have a local position and it mismatches broker
+          if (position && Math.abs(verifyQty) !== Math.abs(position.qty)) {
+            console.log('⚠️ Pre-order verification failed — position mismatch while active trade');
             return;
           }
 
@@ -611,6 +559,91 @@ async function handleStreamBar(tick) {
       }
     }
 
+    // ---- PROFESSIONAL LEG-BASED EXIT CHECK ----
+    if (position) {
+
+      for (const leg of position.legs) {
+        if (!leg.active) continue;
+
+        const hitTP =
+          leg.takeProfit &&
+          (
+            (position.side === 'LONG' && closedBar.high >= leg.takeProfit) ||
+            (position.side === 'SHORT' && closedBar.low <= leg.takeProfit)
+          );
+
+        const hitSL =
+          (position.side === 'LONG' && closedBar.low <= leg.stopLoss) ||
+          (position.side === 'SHORT' && closedBar.high >= leg.stopLoss);
+
+        // === TAKE PROFIT ===
+        if (hitTP) {
+          console.log(`🎯 ${leg.id.toUpperCase()} TP HIT`);
+
+          if (CONFIG.enableTrading) {
+            await tsApi.placeMarketOrder(
+              CONFIG.accountId,
+              CONFIG.symbol,
+              leg.qty,
+              position.side === 'LONG' ? 'SHORT' : 'LONG'
+            );
+          }
+
+          leg.active = false;
+
+          // Activate runner trailing after fixed TP
+          if (leg.id === 'fixed') {
+            const runner = position.legs.find(l => l.id === 'runner');
+            if (runner && runner.active && CONFIG.trailRunner) {
+              runner.trailing = true;
+              console.log('🏃 Runner trailing activated');
+            }
+          }
+
+          await logTrade(position, { price: leg.takeProfit, qty: leg.qty }, `${leg.id}_TP`);
+          continue;
+        }
+
+        // === STOP LOSS ===
+        if (hitSL) {
+          console.log(`🛑 ${leg.id.toUpperCase()} SL HIT`);
+
+          if (CONFIG.enableTrading) {
+            await tsApi.placeMarketOrder(
+              CONFIG.accountId,
+              CONFIG.symbol,
+              leg.qty,
+              position.side === 'LONG' ? 'SHORT' : 'LONG'
+            );
+          }
+
+          leg.active = false;
+
+          await logTrade(position, { price: leg.stopLoss, qty: leg.qty }, `${leg.id}_SL`);
+          continue;
+        }
+
+        // === TRAILING LOGIC (RUNNER ONLY) ===
+        if (leg.id === 'runner' && leg.trailing && leg.active) {
+          if (position.side === 'LONG') {
+            const newStop = closedBar.close - CONFIG.trailDistance;
+            if (newStop > leg.stopLoss) leg.stopLoss = newStop;
+          } else {
+            const newStop = closedBar.close + CONFIG.trailDistance;
+            if (newStop < leg.stopLoss) leg.stopLoss = newStop;
+          }
+        }
+      }
+
+      // If all legs inactive → clear position
+      const stillActive = position.legs.some(l => l.active);
+      if (!stillActive) {
+        console.log('📦 All legs closed — clearing position');
+        position = null;
+        return;
+      }
+    }
+
     if (tradingDisabled) {
       console.log('🛑 Trading disabled for session');
       return;
@@ -655,9 +688,10 @@ async function handleStreamBar(tick) {
           );
 
           const verifyQty = verifyPos ? Number(verifyPos.Quantity) : 0;
-
-          if (Math.abs(verifyQty) !== Math.abs(position?.qty || 0)) {
-            console.log('⚠️ Pre-order verification failed — position changed. Skipping order.');
+          console.log(`🔍 VERIFY CHECK | BrokerQty=${verifyQty} | LocalQty=${position?.qty || 0}`);
+          // When flat, allow entry even if broker shows leftover qty (will be corrected by target sizing)
+          if (position && Math.abs(verifyQty) !== Math.abs(position.qty)) {
+            console.log('⚠️ Pre-order verification failed — position mismatch while active trade');
             return;
           }
 
