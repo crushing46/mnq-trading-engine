@@ -23,7 +23,8 @@ const CONFIG = {
   trailRunner: process.env.TRAIL_RUNNER === 'true',
   trailDistance: Number(process.env.TRAIL_DISTANCE || 20),
   accountId: process.env.ACCOUNT_ID,
-  maxDailyLoss: Number(process.env.MAX_DAILY_LOSS || 0)
+  maxDailyLoss: Number(process.env.MAX_DAILY_LOSS || 0),
+  useTickExecution: process.env.USE_TICK_EXECUTION === 'true',
 };
 
 console.log('🔧 CONFIG:', CONFIG);
@@ -177,6 +178,87 @@ async function onTick(tick) {
   if (tick.time <= position.entryTime) return;
 
   const price = tick.price;
+
+  if (CONFIG.useTickExecution && position) {
+    for (const leg of position.legs) {
+      if (!leg.active) continue;
+
+      const hitTP =
+        leg.takeProfit &&
+        (
+          (position.side === 'LONG' && price >= leg.takeProfit) ||
+          (position.side === 'SHORT' && price <= leg.takeProfit)
+        );
+
+      const hitSL =
+        (position.side === 'LONG' && price <= leg.stopLoss) ||
+        (position.side === 'SHORT' && price >= leg.stopLoss);
+
+      if (hitTP) {
+        console.log(`🎯 (TICK) ${leg.id.toUpperCase()} TP HIT`);
+
+        if (CONFIG.enableTrading) {
+          await tsApi.placeMarketOrder(
+            CONFIG.accountId,
+            CONFIG.symbol,
+            leg.qty,
+            position.side === 'LONG' ? 'SHORT' : 'LONG'
+          );
+        }
+
+        leg.active = false;
+
+        if (leg.id === 'fixed') {
+          const runner = position.legs.find(l => l.id === 'runner');
+          if (runner && runner.active && CONFIG.trailRunner) {
+            runner.trailing = true;
+            console.log('🏃 Runner trailing activated (tick)');
+          }
+        }
+
+        await logTrade(position, { price: leg.takeProfit, qty: leg.qty }, `${leg.id}_TP`);
+        continue;
+      }
+
+      if (hitSL) {
+        console.log(`🛑 (TICK) ${leg.id.toUpperCase()} SL HIT`);
+
+        if (CONFIG.enableTrading) {
+          await tsApi.placeMarketOrder(
+            CONFIG.accountId,
+            CONFIG.symbol,
+            leg.qty,
+            position.side === 'LONG' ? 'SHORT' : 'LONG'
+          );
+        }
+
+        leg.active = false;
+
+        await logTrade(position, { price: leg.stopLoss, qty: leg.qty }, `${leg.id}_SL`);
+        continue;
+      }
+
+      if (leg.id === 'runner' && leg.trailing && leg.active) {
+        const mfePrice =
+          position.side === 'LONG'
+            ? position.entryPrice + position.maxFavorable
+            : position.entryPrice - position.maxFavorable;
+
+        const newStop =
+          position.side === 'LONG'
+            ? mfePrice - CONFIG.trailDistance
+            : mfePrice + CONFIG.trailDistance;
+
+        if (
+          (position.side === 'LONG' && newStop > leg.stopLoss) ||
+          (position.side === 'SHORT' && newStop < leg.stopLoss)
+        ) {
+          leg.stopLoss = newStop;
+          console.log(`📈 MFE TRAIL UPDATE | New SL=${newStop}`);
+        }
+      }
+    }
+  }
 
   const move =
     position.side === 'LONG'
@@ -560,87 +642,89 @@ async function handleStreamBar(tick) {
     }
 
     // ---- PROFESSIONAL LEG-BASED EXIT CHECK ----
-    if (position) {
+    if (!CONFIG.useTickExecution) {
+      if (position) {
 
-      for (const leg of position.legs) {
-        if (!leg.active) continue;
+        for (const leg of position.legs) {
+          if (!leg.active) continue;
 
-        const hitTP =
-          leg.takeProfit &&
-          (
-            (position.side === 'LONG' && closedBar.high >= leg.takeProfit) ||
-            (position.side === 'SHORT' && closedBar.low <= leg.takeProfit)
-          );
-
-        const hitSL =
-          (position.side === 'LONG' && closedBar.low <= leg.stopLoss) ||
-          (position.side === 'SHORT' && closedBar.high >= leg.stopLoss);
-
-        // === TAKE PROFIT ===
-        if (hitTP) {
-          console.log(`🎯 ${leg.id.toUpperCase()} TP HIT`);
-
-          if (CONFIG.enableTrading) {
-            await tsApi.placeMarketOrder(
-              CONFIG.accountId,
-              CONFIG.symbol,
-              leg.qty,
-              position.side === 'LONG' ? 'SHORT' : 'LONG'
+          const hitTP =
+            leg.takeProfit &&
+            (
+              (position.side === 'LONG' && closedBar.high >= leg.takeProfit) ||
+              (position.side === 'SHORT' && closedBar.low <= leg.takeProfit)
             );
+
+          const hitSL =
+            (position.side === 'LONG' && closedBar.low <= leg.stopLoss) ||
+            (position.side === 'SHORT' && closedBar.high >= leg.stopLoss);
+
+          // === TAKE PROFIT ===
+          if (hitTP) {
+            console.log(`🎯 ${leg.id.toUpperCase()} TP HIT`);
+
+            if (CONFIG.enableTrading) {
+              await tsApi.placeMarketOrder(
+                CONFIG.accountId,
+                CONFIG.symbol,
+                leg.qty,
+                position.side === 'LONG' ? 'SHORT' : 'LONG'
+              );
+            }
+
+            leg.active = false;
+
+            // Activate runner trailing after fixed TP
+            if (leg.id === 'fixed') {
+              const runner = position.legs.find(l => l.id === 'runner');
+              if (runner && runner.active && CONFIG.trailRunner) {
+                runner.trailing = true;
+                console.log('🏃 Runner trailing activated');
+              }
+            }
+
+            await logTrade(position, { price: leg.takeProfit, qty: leg.qty }, `${leg.id}_TP`);
+            continue;
           }
 
-          leg.active = false;
+          // === STOP LOSS ===
+          if (hitSL) {
+            console.log(`🛑 ${leg.id.toUpperCase()} SL HIT`);
 
-          // Activate runner trailing after fixed TP
-          if (leg.id === 'fixed') {
-            const runner = position.legs.find(l => l.id === 'runner');
-            if (runner && runner.active && CONFIG.trailRunner) {
-              runner.trailing = true;
-              console.log('🏃 Runner trailing activated');
+            if (CONFIG.enableTrading) {
+              await tsApi.placeMarketOrder(
+                CONFIG.accountId,
+                CONFIG.symbol,
+                leg.qty,
+                position.side === 'LONG' ? 'SHORT' : 'LONG'
+              );
+            }
+
+            leg.active = false;
+
+            await logTrade(position, { price: leg.stopLoss, qty: leg.qty }, `${leg.id}_SL`);
+            continue;
+          }
+
+          // === TRAILING LOGIC (RUNNER ONLY) ===
+          if (leg.id === 'runner' && leg.trailing && leg.active) {
+            if (position.side === 'LONG') {
+              const newStop = closedBar.close - CONFIG.trailDistance;
+              if (newStop > leg.stopLoss) leg.stopLoss = newStop;
+            } else {
+              const newStop = closedBar.close + CONFIG.trailDistance;
+              if (newStop < leg.stopLoss) leg.stopLoss = newStop;
             }
           }
-
-          await logTrade(position, { price: leg.takeProfit, qty: leg.qty }, `${leg.id}_TP`);
-          continue;
         }
 
-        // === STOP LOSS ===
-        if (hitSL) {
-          console.log(`🛑 ${leg.id.toUpperCase()} SL HIT`);
-
-          if (CONFIG.enableTrading) {
-            await tsApi.placeMarketOrder(
-              CONFIG.accountId,
-              CONFIG.symbol,
-              leg.qty,
-              position.side === 'LONG' ? 'SHORT' : 'LONG'
-            );
-          }
-
-          leg.active = false;
-
-          await logTrade(position, { price: leg.stopLoss, qty: leg.qty }, `${leg.id}_SL`);
-          continue;
+        // If all legs inactive → clear position
+        const stillActive = position.legs.some(l => l.active);
+        if (!stillActive) {
+          console.log('📦 All legs closed — clearing position');
+          position = null;
+          return;
         }
-
-        // === TRAILING LOGIC (RUNNER ONLY) ===
-        if (leg.id === 'runner' && leg.trailing && leg.active) {
-          if (position.side === 'LONG') {
-            const newStop = closedBar.close - CONFIG.trailDistance;
-            if (newStop > leg.stopLoss) leg.stopLoss = newStop;
-          } else {
-            const newStop = closedBar.close + CONFIG.trailDistance;
-            if (newStop < leg.stopLoss) leg.stopLoss = newStop;
-          }
-        }
-      }
-
-      // If all legs inactive → clear position
-      const stillActive = position.legs.some(l => l.active);
-      if (!stillActive) {
-        console.log('📦 All legs closed — clearing position');
-        position = null;
-        return;
       }
     }
 
