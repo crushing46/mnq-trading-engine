@@ -165,58 +165,206 @@ class TradeStationAPI {
     await this.ensureValidToken();
 
     const connect = async () => {
-      const url = `${this.baseUrl}/marketdata/stream/barcharts/${symbol}?interval=${interval}&unit=Minute`;
+      try {
+        await this.ensureValidToken();
 
-      const res = await axios({
-        url,
-        method: 'GET',
-        responseType: 'stream',
-        headers: {
-          Authorization: `Bearer ${this.accessToken}`,
-          Accept: 'text/event-stream'
-        },
-        timeout: 0
-      });
+        const url = `${this.baseUrl}/marketdata/stream/barcharts/${symbol}?interval=${interval}&unit=Minute`;
 
-      let buffer = '';
+        const res = await axios({
+          url,
+          method: 'GET',
+          responseType: 'stream',
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            Accept: 'text/event-stream'
+          },
+          timeout: 0
+        });
 
-      res.data.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+        console.log(`✅ Bar stream connected for ${symbol}`);
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
+        let buffer = '';
 
-          let jsonStr = line.startsWith('data:')
-            ? line.replace('data:', '').trim()
-            : line;
+        res.data.on('data', (chunk) => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
 
-          try {
-            const b = JSON.parse(jsonStr);
+          for (const line of lines) {
+            if (!line.trim()) continue;
 
-            if (b.BarStatus !== 'Closed') continue;
+            const jsonStr = line.startsWith('data:')
+              ? line.replace('data:', '').trim()
+              : line.trim();
 
-            onBar({
-              time: new Date(b.TimeStamp),
-              open: +b.Open,
-              high: +b.High,
-              low: +b.Low,
-              close: +b.Close,
-              volume: +b.TotalVolume || 0,
-              barStatus: b.BarStatus
-            });
-          } catch {}
-        }
-      });
+            if (
+              !jsonStr ||
+              jsonStr === '[Heartbeat]' ||
+              jsonStr === 'Heartbeat' ||
+              jsonStr.startsWith('event:')
+            ) {
+              continue;
+            }
 
-      res.data.on('end', () => setTimeout(connect, 5000));
-      res.data.on('error', () => setTimeout(connect, 5000));
+            try {
+              const b = JSON.parse(jsonStr);
+
+              if (b.BarStatus !== 'Closed') continue;
+
+              onBar({
+                time: new Date(b.TimeStamp),
+                open: +b.Open,
+                high: +b.High,
+                low: +b.Low,
+                close: +b.Close,
+                volume: +b.TotalVolume || 0,
+                barStatus: b.BarStatus
+              });
+            } catch {
+              // Ignore malformed stream event
+            }
+          }
+        });
+
+        res.data.on('end', () => {
+          console.log(`⚠️ Bar stream ended for ${symbol}. Reconnecting in 5 seconds...`);
+          setTimeout(connect, 5000);
+        });
+
+        res.data.on('error', (err) => {
+          console.error(`⚠️ Bar stream error for ${symbol}:`, err.message);
+          setTimeout(connect, 5000);
+        });
+      } catch (err) {
+        console.error(`⚠️ Bar stream connection failed for ${symbol}:`, err.message);
+
+        try {
+          await this.ensureValidToken();
+        } catch {}
+
+        setTimeout(connect, 5000);
+      }
     };
 
     connect();
   }
+  // ============================================================
+  // MARKET DATA (STREAMING QUOTES / TICKS)
+  // ============================================================
+  async streamQuotes(symbol, onQuote) {
+    await this.ensureValidToken();
 
+    const connect = async () => {
+      try {
+        await this.ensureValidToken();
+
+        const url = `${this.baseUrl}/marketdata/stream/quotes/${symbol}`;
+
+        const res = await axios({
+          url,
+          method: 'GET',
+          responseType: 'stream',
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            Accept: 'text/event-stream'
+          },
+          timeout: 0
+        });
+
+        console.log(`✅ Quote stream connected for ${symbol}`);
+
+        let buffer = '';
+
+        res.data.on('data', (chunk) => {
+          buffer += chunk.toString();
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+
+            const jsonStr = line.startsWith('data:')
+              ? line.replace('data:', '').trim()
+              : line.trim();
+
+            if (
+              !jsonStr ||
+              jsonStr === '[Heartbeat]' ||
+              jsonStr === 'Heartbeat' ||
+              jsonStr.startsWith('event:')
+            ) {
+              continue;
+            }
+
+            try {
+              const q = JSON.parse(jsonStr);
+
+              // TradeStation quote payloads can vary by asset/feed.
+              // Prefer Last, then fall back to midpoint/bid/ask.
+              const bid = Number(q.Bid ?? q.BidPrice);
+              const ask = Number(q.Ask ?? q.AskPrice);
+              const last = Number(
+                q.Last ??
+                q.LastPrice ??
+                q.TradePrice ??
+                q.Close
+              );
+
+              let price = last;
+
+              if (!Number.isFinite(price)) {
+                if (Number.isFinite(bid) && Number.isFinite(ask)) {
+                  price = (bid + ask) / 2;
+                } else if (Number.isFinite(bid)) {
+                  price = bid;
+                } else if (Number.isFinite(ask)) {
+                  price = ask;
+                }
+              }
+
+              if (!Number.isFinite(price)) {
+                continue;
+              }
+
+              onQuote({
+                symbol: q.Symbol || symbol,
+                time: q.TimeStamp ? new Date(q.TimeStamp) : new Date(),
+                price,
+                bid: Number.isFinite(bid) ? bid : null,
+                ask: Number.isFinite(ask) ? ask : null,
+                last: Number.isFinite(last) ? last : null,
+                raw: q
+              });
+            } catch (err) {
+              // Do not kill stream on one malformed event
+            }
+          }
+        });
+
+        res.data.on('end', () => {
+          console.log(`⚠️ Quote stream ended for ${symbol}. Reconnecting in 5 seconds...`);
+          setTimeout(connect, 5000);
+        });
+
+        res.data.on('error', (err) => {
+          console.error(`⚠️ Quote stream error for ${symbol}:`, err.message);
+          setTimeout(connect, 5000);
+        });
+      } catch (err) {
+        console.error(`⚠️ Quote stream connection failed for ${symbol}:`, err.message);
+
+        // Token may have expired while streaming.
+        try {
+          await this.ensureValidToken();
+        } catch {}
+
+        setTimeout(connect, 5000);
+      }
+    };
+
+    connect();
+  }
   // ============================================================
   // ORDER EXECUTION
   // ============================================================
