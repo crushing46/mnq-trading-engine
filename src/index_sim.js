@@ -14,9 +14,49 @@ app.use(express.json());
 
 const PORT = 3001;
 
+function normalizeTradeStationSymbol(rawSymbol) {
+  const symbol = String(rawSymbol || '').trim();
+
+  if (!symbol) return symbol;
+
+  // TradeStation API futures order symbols should not use the chart-style @ prefix.
+  if (symbol.startsWith('@')) {
+    const cleaned = symbol.replace(/^@+/, '');
+    console.warn(`⚠️ Removed chart-style @ prefix from SYMBOL. Using TradeStation symbol: ${cleaned}`);
+    return cleaned;
+  }
+
+  return symbol;
+}
+
+function logSafeError(context, err) {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+  const message = err?.message || 'Unknown error';
+
+  console.error(`❌ ${context}`);
+  console.error(`Message: ${message}`);
+
+  if (status) {
+    console.error(`Status: ${status}`);
+  }
+
+  if (data) {
+    console.error('Response:', typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+  }
+}
+
+process.on('unhandledRejection', (err) => {
+  logSafeError('Unhandled promise rejection caught — bot will keep running if possible', err);
+});
+
+process.on('uncaughtException', (err) => {
+  logSafeError('Uncaught exception caught — bot will keep running if possible', err);
+});
+
 // ================= CONFIG =================
 const CONFIG = {
-  symbol: process.env.SYMBOL,
+  symbol: normalizeTradeStationSymbol(process.env.SYMBOL),
   qty: Number(process.env.CONTRACT_SIZE || 2),
   tp: Number(process.env.TP_POINTS || 40),
   sl: Number(process.env.SL_POINTS || 40),
@@ -37,8 +77,12 @@ console.log(`📡 Using SYMBOL: "${CONFIG.symbol}"`);
 
 if (!CONFIG.symbol) {
   console.warn('⚠️ SYMBOL is undefined in .env');
+} else if (CONFIG.symbol.startsWith('@')) {
+  console.error(`❌ Invalid TradeStation futures symbol: ${CONFIG.symbol}`);
+  console.error('TradeStation API should use MNQM26, not @MNQM26. Update SYMBOL in .env.');
+  process.exit(1);
 } else {
-  console.log(`✅ Symbol configured: ${CONFIG.symbol}`);
+  console.log(`✅ Symbol configured for TradeStation API: ${CONFIG.symbol}`);
 }
 
 if (!CONFIG.accountId) {
@@ -187,11 +231,15 @@ async function onTick(tick) {
   if (!tick || !Number.isFinite(tick.price)) return;
 
   if (CONFIG.useTickExecution) {
-    await positionManager.checkExitsByPrice({
-      price: tick.price,
-      time: tick.time,
-      source: 'TICK'
-    });
+    try {
+      await positionManager.checkExitsByPrice({
+        price: tick.price,
+        time: tick.time,
+        source: 'TICK'
+      });
+    } catch (err) {
+      logSafeError('Tick exit check failed', err);
+    }
   }
 }
 
@@ -241,7 +289,13 @@ async function handleStreamBar(tick) {
 
     riskManager.resetIfNewDay(closedBar.time);
 
-    const eodFlattened = await handleEodFlatten(closedBar);
+    let eodFlattened = false;
+
+    try {
+      eodFlattened = await handleEodFlatten(closedBar);
+    } catch (err) {
+      logSafeError('EOD flatten failed', err);
+    }
     if (eodFlattened) {
       rolloverFormingBar(tick, minuteTs);
       return;
@@ -256,7 +310,11 @@ async function handleStreamBar(tick) {
 
     // Safety: always evaluate bar TP/SL as a backup.
     // Even when USE_TICK_EXECUTION=true, this catches missed stream updates.
-    await positionManager.checkExitsByBar(closedBar);
+    try {
+      await positionManager.checkExitsByBar(closedBar);
+    } catch (err) {
+      logSafeError('Bar exit check failed', err);
+    }
 
     if (!riskManager.canTrade()) {
       console.log('🛑 Trading disabled for session');
@@ -274,11 +332,15 @@ async function handleStreamBar(tick) {
         signal.type &&
         signal.type !== currentPosition.side
       ) {
-        await positionManager.flipPosition({
-          newSide: signal.type,
-          price: closedBar.close,
-          time: closedBar.time
-        });
+        try {
+          await positionManager.flipPosition({
+            newSide: signal.type,
+            price: closedBar.close,
+            time: closedBar.time
+          });
+        } catch (err) {
+          logSafeError('Flip position failed — broker state not changed locally by index_sim.js', err);
+        }
 
         rolloverFormingBar(tick, minuteTs);
         return;
@@ -299,11 +361,15 @@ async function handleStreamBar(tick) {
           }`
         );
 
-        await positionManager.enterTargetPosition({
-          side: signal.type,
-          entryPrice: closedBar.close,
-          entryTime: closedBar.time
-        });
+        try {
+          await positionManager.enterTargetPosition({
+            side: signal.type,
+            entryPrice: closedBar.close,
+            entryTime: closedBar.time
+          });
+        } catch (err) {
+          logSafeError('Entry order failed — bot will stay flat unless broker confirms otherwise', err);
+        }
       } else {
         console.log('⏭ No entry');
       }
@@ -377,9 +443,16 @@ async function startBot() {
 
   console.log('🚀 Starting MNQ Bot...');
 
-  const hist = await tsApi.getHistoricalBars(CONFIG.symbol, 1, 'Minute', 300);
+  let hist;
 
-  hist.Bars.forEach((b) =>
+  try {
+    hist = await tsApi.getHistoricalBars(CONFIG.symbol, 1, 'Minute', 300);
+  } catch (err) {
+    logSafeError('Failed to load historical bars — bot will not start stream', err);
+    return;
+  }
+
+  (hist.Bars || []).forEach((b) =>
     strategy.addBar({
       time: new Date(b.TimeStamp),
       open: +b.Open,
@@ -390,9 +463,18 @@ async function startBot() {
     })
   );
 
-  await tsApi.streamBars(CONFIG.symbol, 1, async (bar) => {
-    await handleStreamBar(bar);
-  });
+  try {
+    await tsApi.streamBars(CONFIG.symbol, 1, async (bar) => {
+      try {
+        await handleStreamBar(bar);
+      } catch (err) {
+        logSafeError('Stream bar handler failed — continuing stream', err);
+      }
+    });
+  } catch (err) {
+    logSafeError('Bar stream failed', err);
+    return;
+  }
 
   if (CONFIG.useTickExecution) {
     if (typeof tsApi.streamQuotes !== 'function') {
@@ -404,15 +486,23 @@ async function startBot() {
 
     console.log('✅ True quote/tick execution enabled for TP/SL');
 
-    await tsApi.streamQuotes(CONFIG.symbol, async (quote) => {
-      await onTick({
-        price: quote.price,
-        time: quote.time,
-        bid: quote.bid,
-        ask: quote.ask,
-        last: quote.last
+    try {
+      await tsApi.streamQuotes(CONFIG.symbol, async (quote) => {
+        try {
+          await onTick({
+            price: quote.price,
+            time: quote.time,
+            bid: quote.bid,
+            ask: quote.ask,
+            last: quote.last
+          });
+        } catch (err) {
+          logSafeError('Quote handler failed — continuing stream', err);
+        }
       });
-    });
+    } catch (err) {
+      logSafeError('Quote stream failed', err);
+    }
   } else {
     console.log('ℹ️ USE_TICK_EXECUTION=false — TP/SL will use bar high/low backup only');
   }
@@ -421,5 +511,10 @@ async function startBot() {
 // ================= SERVER =================
 app.listen(PORT, async () => {
   console.log(`Server listening on ${PORT}`);
-  await startBot();
+
+  try {
+    await startBot();
+  } catch (err) {
+    logSafeError('Bot startup failed', err);
+  }
 });
