@@ -79,6 +79,11 @@ class RiskManager {
     console.log(`🛑 Trading disabled | Reason=${reason}`);
   }
 
+  enable(reason = 'UNKNOWN') {
+    this.tradingDisabled = false;
+    console.log(`✅ Trading enabled | Reason=${reason}`);
+  }
+
   getState() {
     return {
       dailyPnL: this.dailyPnL,
