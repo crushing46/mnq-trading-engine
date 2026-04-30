@@ -2,6 +2,8 @@ class RiskManager {
   constructor({ maxDailyLoss }) {
     this.maxDailyLoss = Number(maxDailyLoss || 0);
     this.dailyPnL = 0;
+    this.brokerDailyPnL = 0;
+    this.brokerRealizedPnL = 0;
     this.brokerUnrealizedPnL = 0;
     this.consecutiveLosses = 0;
     this.tradingDisabled = false;
@@ -14,6 +16,8 @@ class RiskManager {
     if (this.currentTradeDate !== tradeDate) {
       this.currentTradeDate = tradeDate;
       this.dailyPnL = 0;
+      this.brokerDailyPnL = 0;
+      this.brokerRealizedPnL = 0;
       this.brokerUnrealizedPnL = 0;
       this.consecutiveLosses = 0;
       this.tradingDisabled = false;
@@ -47,17 +51,19 @@ class RiskManager {
     return this.tradingDisabled;
   }
 
-  updateBrokerPnL({ dailyPnL, unrealizedPnL }) {
-    const brokerRealizedPnL = Number.isFinite(dailyPnL) ? dailyPnL : 0;
+  updateBrokerPnL({ dailyPnL, realizedPnL, unrealizedPnL }) {
+    const brokerDailyPnL = Number.isFinite(dailyPnL) ? dailyPnL : 0;
+    const brokerRealizedPnL = Number.isFinite(realizedPnL) ? realizedPnL : 0;
     const brokerOpenPnL = Number.isFinite(unrealizedPnL) ? unrealizedPnL : 0;
 
-    // Keep local dailyPnL as the bot's source of truth for realized exits.
-    // Broker values are used only as an additional safety check so stale/zero
-    // broker fields cannot accidentally reset local loss tracking.
+    this.brokerDailyPnL = brokerDailyPnL;
+    this.brokerRealizedPnL = brokerRealizedPnL;
     this.brokerUnrealizedPnL = brokerOpenPnL;
 
+    // Keep local dailyPnL as the bot's source of truth for strategy/session exits.
+    // Broker values are used as additional visibility and safety checks.
     const localExposure = this.dailyPnL + this.brokerUnrealizedPnL;
-    const brokerExposure = brokerRealizedPnL + brokerOpenPnL;
+    const brokerExposure = brokerDailyPnL + brokerOpenPnL;
     const worstExposure = Math.min(localExposure, brokerExposure);
 
     if (this.maxDailyLoss > 0 && worstExposure <= -this.maxDailyLoss) {
@@ -87,6 +93,8 @@ class RiskManager {
   getState() {
     return {
       dailyPnL: this.dailyPnL,
+      brokerDailyPnL: this.brokerDailyPnL,
+      brokerRealizedPnL: this.brokerRealizedPnL,
       brokerUnrealizedPnL: this.brokerUnrealizedPnL,
       consecutiveLosses: this.consecutiveLosses,
       tradingDisabled: this.tradingDisabled,

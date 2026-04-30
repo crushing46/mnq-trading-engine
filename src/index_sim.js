@@ -152,25 +152,38 @@ async function getLiveBrokerPosition() {
 async function updateBrokerPnLAndEnforceRisk() {
   try {
     const balances = await tsApi.getAccountBalances(CONFIG.accountId);
+    const balance = balances?.Balances?.[0] || balances?.Balances || balances || {};
+    const detail = balance?.BalanceDetail || {};
+    const currency = balance?.CurrencyDetails?.[0] || {};
 
     const brokerDailyPnL = Number(
-      balances?.Balances?.DayTradeProfitLoss ??
-      balances?.DayTradeProfitLoss ??
-      balances?.Balances?.DailyProfitLoss ??
-      balances?.DailyProfitLoss ??
-      riskManager.dailyPnL
+      balance?.TodaysProfitLoss ??
+      balance?.DayTradeProfitLoss ??
+      balance?.DailyProfitLoss ??
+      detail?.TodaysProfitLoss ??
+      detail?.DayTradeProfitLoss ??
+      riskManager.dailyPnL ??
+      0
+    );
+
+    const brokerRealizedPnL = Number(
+      detail?.RealizedProfitLoss ??
+      currency?.RealizedProfitLoss ??
+      balance?.RealizedProfitLoss ??
+      0
     );
 
     const brokerUnrealizedPnL = Number(
-      balances?.Balances?.OpenTradeProfitLoss ??
-      balances?.OpenTradeProfitLoss ??
-      balances?.Balances?.UnrealizedProfitLoss ??
-      balances?.UnrealizedProfitLoss ??
+      detail?.UnrealizedProfitLoss ??
+      currency?.UnrealizedProfitLoss ??
+      balance?.UnrealizedProfitLoss ??
+      balance?.OpenTradeProfitLoss ??
       0
     );
 
     const breached = riskManager.updateBrokerPnL({
       dailyPnL: brokerDailyPnL,
+      realizedPnL: brokerRealizedPnL,
       unrealizedPnL: brokerUnrealizedPnL
     });
 
