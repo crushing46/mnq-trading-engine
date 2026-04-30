@@ -16,6 +16,55 @@ class PositionManager {
     return this.position;
   }
 
+  getOpenQty() {
+    if (!this.position) return 0;
+
+    if (Array.isArray(this.position.legs)) {
+      return this.position.legs
+        .filter((leg) => leg.active)
+        .reduce((sum, leg) => sum + Math.abs(Number(leg.qty || 0)), 0);
+    }
+
+    return Math.abs(Number(this.position.qty || 0));
+  }
+
+  reconcileOpenQty(targetOpenQty, reason = 'BROKER_RECONCILE') {
+    if (!this.position || !Array.isArray(this.position.legs)) return;
+
+    const targetQty = Math.abs(Number(targetOpenQty || 0));
+    let remainingToClose = this.getOpenQty() - targetQty;
+
+    if (remainingToClose <= 0) return;
+
+    // Prefer closing the fixed leg first. If the broker quantity dropped after
+    // fixed TP, this preserves the runner leg and its trailing state.
+    const legsByClosePriority = [...this.position.legs].sort((a, b) => {
+      if (a.id === 'fixed' && b.id !== 'fixed') return -1;
+      if (a.id !== 'fixed' && b.id === 'fixed') return 1;
+      return 0;
+    });
+
+    for (const leg of legsByClosePriority) {
+      if (remainingToClose <= 0) break;
+      if (!leg.active) continue;
+
+      const legQty = Math.abs(Number(leg.qty || 0));
+
+      if (legQty <= remainingToClose) {
+        leg.active = false;
+        leg.reconciledReason = reason;
+        remainingToClose -= legQty;
+        console.log(`🔄 Reconciled closed leg | Leg=${leg.id} | Qty=${legQty} | Reason=${reason}`);
+      }
+    }
+
+    this.position.qty = this.getOpenQty();
+
+    if (this.position.qty <= 0) {
+      this.clearPosition('BROKER_QTY_ZERO_RECONCILE');
+    }
+  }
+
   clearPosition(reason = 'UNKNOWN') {
     if (this.position) {
       console.log(`📦 Clearing internal position | Reason=${reason}`);
@@ -85,64 +134,93 @@ class PositionManager {
     const qty = Number(brokerPosition.Quantity);
     const side = qty > 0 ? 'LONG' : 'SHORT';
     const absQty = Math.abs(qty);
-    const entryPrice = Number(brokerPosition.AveragePrice);
+    const entryPrice = Number(
+      brokerPosition.AveragePrice ??
+      brokerPosition.AvgPrice ??
+      brokerPosition.AverageOpenPrice ??
+      brokerPosition.OpenPrice
+    );
 
     if (!Number.isFinite(entryPrice) || absQty <= 0) {
       this.clearPosition('INVALID_BROKER_POSITION');
       return;
     }
 
-    if (!this.position || this.position.side !== side || this.position.qty !== absQty) {
-      console.log(`🔄 Synced broker position: ${side} ${absQty} @ ${entryPrice}`);
+    if (this.position) {
+      const localOpenQty = this.getOpenQty();
 
-      this.createPosition({
-        side,
-        entryPrice,
-        entryTime: new Date(),
-        qty: absQty
-      });
+      if (this.position.side === side && localOpenQty === absQty) {
+        if (Math.abs(entryPrice - this.position.entryPrice) > 0.01) {
+          console.log(
+            `🔄 Syncing entry price | Old=${this.position.entryPrice} New=${entryPrice}`
+          );
 
-      return;
+          this.position.entryPrice = entryPrice;
+          this.rebuildLevelsFromEntry(entryPrice);
+
+          console.log(
+            `📌 Updated levels | TP=${
+              side === 'LONG'
+                ? entryPrice + this.config.tp
+                : entryPrice - this.config.tp
+            } | SL=${
+              side === 'LONG'
+                ? entryPrice - this.config.sl
+                : entryPrice + this.config.sl
+            }`
+          );
+        }
+
+        return;
+      }
+
+      if (this.position.side === side && absQty < localOpenQty) {
+        console.log(
+          `🔄 Broker qty reduced during sync | LocalOpenQty=${localOpenQty} BrokerQty=${absQty}. Preserving existing legs.`
+        );
+        this.reconcileOpenQty(absQty, 'BROKER_QTY_REDUCED_SYNC');
+        return;
+      }
     }
 
-    if (Math.abs(entryPrice - this.position.entryPrice) > 0.01) {
-      console.log(
-        `🔄 Syncing entry price | Old=${this.position.entryPrice} New=${entryPrice}`
-      );
+    console.log(`🔄 Synced broker position: ${side} ${absQty} @ ${entryPrice}`);
 
-      this.position.entryPrice = entryPrice;
-      this.rebuildLevelsFromEntry(entryPrice);
-
-      console.log(
-        `📌 Updated levels | TP=${
-          side === 'LONG'
-            ? entryPrice + this.config.tp
-            : entryPrice - this.config.tp
-        } | SL=${
-          side === 'LONG'
-            ? entryPrice - this.config.sl
-            : entryPrice + this.config.sl
-        }`
-      );
-    }
+    this.createPosition({
+      side,
+      entryPrice,
+      entryTime: new Date(),
+      qty: absQty
+    });
   }
 
   rebuildLevelsFromEntry(entryPrice) {
     if (!this.position) return;
 
+    const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
+
     for (const leg of this.position.legs) {
+      if (!leg.active) continue;
+
       if (this.position.side === 'LONG') {
         if (leg.id === 'fixed') {
           leg.takeProfit = entryPrice + this.config.tp;
         }
 
-        leg.stopLoss = entryPrice - this.config.sl;
+        if (this.position.beAdjusted) {
+          leg.stopLoss = entryPrice + beOffsetPoints;
+        } else {
+          leg.stopLoss = entryPrice - this.config.sl;
+        }
       } else {
         if (leg.id === 'fixed') {
           leg.takeProfit = entryPrice - this.config.tp;
         }
 
-        leg.stopLoss = entryPrice + this.config.sl;
+        if (this.position.beAdjusted) {
+          leg.stopLoss = entryPrice - beOffsetPoints;
+        } else {
+          leg.stopLoss = entryPrice + this.config.sl;
+        }
       }
     }
   }
@@ -472,6 +550,7 @@ class PositionManager {
 
     // Mark inactive immediately to prevent duplicate exits from tick/bar overlap.
     leg.active = false;
+    this.position.qty = this.getOpenQty();
     this.lastKnownPrice = exitPrice;
 
     console.log(`🚪 EXIT LEG | ${reason} | Qty=${leg.qty} | Price=${exitPrice}`);

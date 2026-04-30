@@ -208,7 +208,64 @@ async function reconcileBrokerPosition() {
       return;
     }
 
-    if (livePos) {
+    if (!livePos) return;
+
+    const brokerQty = Number(livePos.Quantity || 0);
+    const brokerSide = brokerQty > 0 ? 'LONG' : 'SHORT';
+    const absBrokerQty = Math.abs(brokerQty);
+
+    // If bot has no internal position but broker does, adopt it.
+    // This covers manual entries or bot restart while a position is open.
+    if (!positionManager.hasPosition()) {
+      console.log(`🔄 No local position but broker has ${brokerSide} ${absBrokerQty} — adopting broker position`);
+      positionManager.syncFromBrokerPosition(livePos);
+      return;
+    }
+
+    const localPosition = positionManager.getPosition();
+    const localSide = localPosition?.side;
+    const localOpenQty = typeof positionManager.getOpenQty === 'function'
+      ? positionManager.getOpenQty()
+      : Math.abs(
+          (localPosition?.legs || [])
+            .filter((leg) => !leg.closed)
+            .reduce((sum, leg) => sum + Number(leg.qty || 0), 0)
+        );
+
+    // If side changed, broker and bot are out of sync. Re-adopt broker state.
+    if (localSide !== brokerSide) {
+      console.log(
+        `⚠️ Broker side mismatch | Local=${localSide} Broker=${brokerSide}. Re-syncing from broker.`
+      );
+      positionManager.syncFromBrokerPosition(livePos);
+      return;
+    }
+
+    // If broker qty matches remaining open internal legs, do NOT recreate position.
+    // This is the key runner fix.
+    if (absBrokerQty === localOpenQty) {
+      return;
+    }
+
+    // If broker qty is lower than local qty, mark closed legs without recreating full position.
+    if (absBrokerQty < localOpenQty) {
+      console.log(
+        `🔄 Broker qty reduced | LocalOpenQty=${localOpenQty} BrokerQty=${absBrokerQty}. Preserving runner state.`
+      );
+
+      if (typeof positionManager.reconcileOpenQty === 'function') {
+        positionManager.reconcileOpenQty(absBrokerQty, 'BROKER_QTY_REDUCED');
+      }
+
+      return;
+    }
+
+    // If broker qty is higher than local qty, something manual happened.
+    // Re-adopt to avoid under-managing risk.
+    if (absBrokerQty > localOpenQty) {
+      console.log(
+        `⚠️ Broker qty greater than local | LocalOpenQty=${localOpenQty} BrokerQty=${absBrokerQty}. Re-syncing from broker.`
+      );
       positionManager.syncFromBrokerPosition(livePos);
     }
   } catch (err) {
@@ -274,7 +331,7 @@ async function handleStreamBar(tick) {
   if (!tick || !(tick.time instanceof Date) || !Number.isFinite(tick.close)) return;
 
   positionManager.lastKnownPrice = tick.close;
-  
+
   const minuteTs = Math.floor(tick.time.getTime() / 60000) * 60000;
 
   if (!formingBar) {
