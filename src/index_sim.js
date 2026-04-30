@@ -9,6 +9,7 @@ const TradeLogger = require('./services/tradeLogger');
 const RiskManager = require('./services/riskManager');
 const PositionManager = require('./services/positionManager');
 const createDashboardApi = require('./routes/dashboardApi');
+const Notifier = require('./services/notifier');
 
 const app = express();
 app.use(express.json());
@@ -129,6 +130,12 @@ const positionManager = new PositionManager({
   riskManager,
   tradeLogger
 });
+
+const notifier = new Notifier({
+  pushoverUser: process.env.PUSHOVER_USER,
+  pushoverToken: process.env.PUSHOVER_TOKEN
+});
+
 app.use('/api', createDashboardApi({
   config: CONFIG,
   tsApi,
@@ -554,15 +561,24 @@ async function startBot() {
     } catch (err) {
       console.error('⚠️ Failed to sync broker positions:', err.message);
     }
-  } catch {
+    } catch {
+    const authUrl = tsApi.getAuthorizationUrl();
+
     console.log('\n🔐 AUTHORIZATION REQUIRED\n');
     console.log('Open this URL in your browser:\n');
-    console.log(tsApi.getAuthorizationUrl());
+    console.log(authUrl);
+
+    await notifier.sendAuthRequired(authUrl);
+
     return;
   }
 
   console.log('🚀 Starting MNQ Bot...');
-
+  await notifier.sendBotStarted({
+    symbol: CONFIG.symbol,
+    accountId: CONFIG.accountId,
+    mode: process.env.BOT_MODE || 'SIM'
+  });
   let hist;
 
   try {
