@@ -364,6 +364,10 @@
           <span id="tickExecution" class="value">--</span>
         </div>
         <div class="row">
+          <span class="muted">Last Price</span>
+          <span id="lastKnownPrice" class="value">--</span>
+        </div>
+        <div class="row">
           <span class="muted">Daily Risk Disabled</span>
           <span id="riskDisabled" class="value">--</span>
         </div>
@@ -494,6 +498,16 @@
       });
     }
 
+    function price(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '--';
+
+      return n.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
     function pnlClass(value) {
       const n = Number(value || 0);
       if (n > 0) return 'good-text';
@@ -601,6 +615,53 @@
       $('connectionPill').className = 'pill good';
     }
 
+    async function loadLive() {
+      const live = await apiGet('/api/live');
+      const bot = live.bot || {};
+      const risk = live.risk || {};
+      const localPosition = live.localPosition || null;
+      const market = live.market || {};
+
+      setText('symbol', bot.symbol || '--');
+      setText('modePill', bot.mode || 'SIM');
+      setText('connectionPill', 'Connected');
+      $('connectionPill').className = 'pill good';
+
+      setText('tradingStatus', bot.enableTrading ? 'Enabled' : 'Paused');
+      $('tradingStatus').className = bot.enableTrading ? 'value good-text' : 'value warn-text';
+
+      setText('tickExecution', bot.useTickExecution ? 'Enabled' : 'Off');
+      setText('lastKnownPrice', price(market.lastKnownPrice));
+
+      setText('riskDisabled', risk.tradingDisabled ? 'Yes' : 'No');
+      $('riskDisabled').className = risk.tradingDisabled ? 'value bad-text' : 'value good-text';
+
+      setText('tradeDate', risk.currentTradeDate || '--');
+
+      setText('riskDailyPnl', money(risk.dailyPnL));
+      $('riskDailyPnl').className = `value ${pnlClass(risk.dailyPnL)}`;
+
+      setText('riskUnrealized', money(risk.brokerUnrealizedPnL));
+      $('riskUnrealized').className = `value ${pnlClass(risk.brokerUnrealizedPnL)}`;
+
+      setText('consecutiveLosses', risk.consecutiveLosses ?? '--');
+      setText('tpSl', `${bot.tp ?? '--'} / ${bot.sl ?? '--'} pts`);
+      setText('qty', bot.qty ?? '--');
+
+      if (localPosition) {
+        const side = localPosition.side || '--';
+        const qty = localPosition.qty ?? '--';
+        const entry = localPosition.entryPrice ?? '--';
+
+        setText('positionMain', `${side} ${qty}`);
+        setText('positionSub', `Local position · Entry ${price(entry)}`);
+        setText('positionPill', side);
+        $('positionPill').className = side === 'LONG' ? 'pill good' : 'pill warn-text';
+      }
+
+      setText('updatedAt', new Date(live.timestamp).toLocaleTimeString());
+    }
+
     async function loadStatus() {
       const status = await apiGet('/api/status');
       const bot = status.bot || {};
@@ -681,8 +742,7 @@
     async function refreshAll() {
       try {
         await Promise.all([
-          loadHealth(),
-          loadStatus(),
+          loadLive(),
           loadPositions(),
           loadBalances()
         ]);
@@ -731,7 +791,35 @@
     }
 
     refreshAll();
-    setInterval(refreshAll, 15000);
+
+    // Fast refresh: in-memory bot state only, no TradeStation API hit.
+    setInterval(async () => {
+      try {
+        await loadLive();
+      } catch (err) {
+        setText('connectionPill', 'Disconnected');
+        $('connectionPill').className = 'pill bad-text';
+      }
+    }, 1000);
+
+    // Medium refresh: broker position reconciliation view.
+    setInterval(async () => {
+      try {
+        await loadPositions();
+      } catch (err) {
+        showToast(`Position refresh failed: ${err.message}`);
+      }
+    }, 5000);
+
+    // Slower refresh: broker balances / P&L.
+    setInterval(async () => {
+      try {
+        await loadBalances();
+      } catch (err) {
+        showToast(`Balance refresh failed: ${err.message}`);
+      }
+    }, 10000);
+    
   </script>
 </body>
 </html>

@@ -132,6 +132,7 @@ app.use('/api', createDashboardApi({
   positionManager,
   riskManager,
   tradeLogger,
+  strategy,
   getLiveBrokerPosition
 }));
 

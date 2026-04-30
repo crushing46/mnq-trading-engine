@@ -49,6 +49,7 @@ function createDashboardApi({
   positionManager,
   riskManager,
   tradeLogger,
+  strategy,
   getLiveBrokerPosition
 }) {
   const express = require('express');
@@ -67,6 +68,47 @@ function createDashboardApi({
       enableTrading: config.enableTrading,
       useTickExecution: config.useTickExecution
     });
+  });
+
+  router.get('/live', (req, res) => {
+    try {
+      const localPosition = typeof positionManager.getPosition === 'function'
+        ? positionManager.getPosition()
+        : null;
+
+      const riskState = typeof riskManager.getState === 'function'
+        ? riskManager.getState()
+        : null;
+
+      res.json({
+        ok: true,
+        timestamp: new Date().toISOString(),
+        bot: {
+          mode: process.env.BOT_MODE || 'SIM',
+          symbol: config.symbol,
+          accountId: config.accountId,
+          enableTrading: config.enableTrading,
+          useTickExecution: config.useTickExecution,
+          trailRunner: config.trailRunner,
+          trailDistance: config.trailDistance,
+          tp: config.tp,
+          sl: config.sl,
+          beTriggerPoints: config.beTriggerPoints,
+          beOffsetPoints: config.beOffsetPoints,
+          qty: config.qty
+        },
+        market: {
+          lastKnownPrice: positionManager.lastKnownPrice ?? null
+        },
+        localPosition,
+        risk: riskState
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err.message
+      });
+    }
   });
 
   router.get('/status', async (req, res) => {
@@ -92,6 +134,8 @@ function createDashboardApi({
           trailDistance: config.trailDistance,
           tp: config.tp,
           sl: config.sl,
+          beTriggerPoints: config.beTriggerPoints,
+          beOffsetPoints: config.beOffsetPoints,
           qty: config.qty
         },
         localPosition,
