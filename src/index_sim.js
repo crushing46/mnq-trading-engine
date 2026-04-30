@@ -255,6 +255,7 @@ function printBar(closedBar) {
 // ================= TICK/BAR HANDLING =================
 async function onTick(tick) {
   if (!tick || !Number.isFinite(tick.price)) return;
+  positionManager.lastKnownPrice = tick.price;
 
   if (CONFIG.useTickExecution) {
     try {
@@ -272,6 +273,8 @@ async function onTick(tick) {
 async function handleStreamBar(tick) {
   if (!tick || !(tick.time instanceof Date) || !Number.isFinite(tick.close)) return;
 
+  positionManager.lastKnownPrice = tick.close;
+  
   const minuteTs = Math.floor(tick.time.getTime() / 60000) * 60000;
 
   if (!formingBar) {
