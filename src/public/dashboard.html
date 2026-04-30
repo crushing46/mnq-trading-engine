@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MNQ Bot Dashboard</title>
+
+  <style>
+    :root {
+      --bg: #070a12;
+      --panel: rgba(255, 255, 255, 0.075);
+      --panel-strong: rgba(255, 255, 255, 0.115);
+      --border: rgba(255, 255, 255, 0.12);
+      --text: #f5f7fb;
+      --muted: #8f9bb3;
+      --good: #35d07f;
+      --bad: #ff5c7a;
+      --warn: #ffcc66;
+      --blue: #64a8ff;
+      --purple: #9f7aea;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      --radius: 24px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 0%, rgba(100, 168, 255, 0.22), transparent 32%),
+        radial-gradient(circle at 90% 10%, rgba(159, 122, 234, 0.18), transparent 34%),
+        radial-gradient(circle at 50% 100%, rgba(53, 208, 127, 0.12), transparent 30%),
+        var(--bg);
+      padding: 18px;
+    }
+
+    .app {
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(100, 168, 255, 0.95), rgba(159, 122, 234, 0.95));
+      box-shadow: 0 14px 35px rgba(100, 168, 255, 0.22);
+      font-weight: 900;
+      letter-spacing: -0.06em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .pill {
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.07);
+      padding: 8px 11px;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    .pill.good {
+      color: var(--good);
+      border-color: rgba(53, 208, 127, 0.35);
+      background: rgba(53, 208, 127, 0.1);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+
+    .card {
+      grid-column: span 12;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--panel-strong), var(--panel));
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .hero {
+      min-height: 175px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -60px -90px auto;
+      width: 220px;
+      height: 220px;
+      background: radial-gradient(circle, rgba(100, 168, 255, 0.22), transparent 65%);
+      pointer-events: none;
+    }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-bottom: 10px;
+    }
+
+    .big {
+      font-size: clamp(2rem, 7vw, 4rem);
+      line-height: 0.95;
+      letter-spacing: -0.08em;
+      font-weight: 850;
+    }
+
+    .metric {
+      font-size: 1.55rem;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .small {
+      font-size: 0.82rem;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+    }
+
+    .row:last-child {
+      border-bottom: 0;
+    }
+
+    .value {
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .good-text {
+      color: var(--good);
+    }
+
+    .bad-text {
+      color: var(--bad);
+    }
+
+    .warn-text {
+      color: var(--warn);
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 17px;
+      padding: 13px 14px;
+      color: white;
+      background: rgba(255, 255, 255, 0.11);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .primary {
+      background: linear-gradient(135deg, rgba(100, 168, 255, 0.95), rgba(159, 122, 234, 0.95));
+    }
+
+    .danger {
+      background: linear-gradient(135deg, rgba(255, 92, 122, 0.95), rgba(255, 139, 92, 0.95));
+    }
+
+    .success {
+      background: linear-gradient(135deg, rgba(53, 208, 127, 0.95), rgba(49, 196, 190, 0.9));
+    }
+
+    .warning {
+      background: linear-gradient(135deg, rgba(255, 204, 102, 0.95), rgba(255, 151, 84, 0.9));
+      color: #1b1305;
+    }
+
+    .footer {
+      margin: 18px 0 6px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.76rem;
+    }
+
+    .toast {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 16px;
+      max-width: 620px;
+      margin: 0 auto;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(11, 15, 27, 0.94);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      transform: translateY(130%);
+      transition: transform 0.22s ease;
+      color: var(--text);
+      z-index: 10;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+    }
+
+    .secret-panel {
+      margin-bottom: 14px;
+      display: none;
+    }
+
+    .secret-panel.show {
+      display: block;
+    }
+
+    input {
+      width: 100%;
+      padding: 13px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      outline: none;
+      margin-top: 8px;
+    }
+
+    input::placeholder {
+      color: rgba(143, 155, 179, 0.75);
+    }
+
+    @media (min-width: 760px) {
+      .span-3 { grid-column: span 3; }
+      .span-4 { grid-column: span 4; }
+      .span-5 { grid-column: span 5; }
+      .span-6 { grid-column: span 6; }
+      .span-7 { grid-column: span 7; }
+      .span-8 { grid-column: span 8; }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <section class="topbar">
+      <div class="brand">
+        <div class="logo">NQ</div>
+        <div>
+          <h1>MNQ Bot</h1>
+          <div class="subtitle">TradeStation SIM Remote Dashboard</div>
+        </div>
+      </div>
+
+      <div id="connectionPill" class="pill">Connecting...</div>
+    </section>
+
+    <section id="secretPanel" class="card secret-panel">
+      <div class="card-title">
+        <span>Access Setup</span>
+        <span class="muted">Stored only in this browser</span>
+      </div>
+
+      <label class="small muted">Bot API Key</label>
+      <input id="apiKeyInput" type="password" placeholder="Paste BOT_API_KEY" />
+
+      <label class="small muted">Control Token</label>
+      <input id="controlTokenInput" type="password" placeholder="Paste BOT_CONTROL_TOKEN" />
+
+      <div class="actions">
+        <button class="primary" onclick="saveSecrets()">Save</button>
+        <button onclick="clearSecrets()">Clear</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card hero span-7">
+        <div>
+          <div class="card-title">
+            <span>Account Equity</span>
+            <span id="modePill" class="pill">SIM</span>
+          </div>
+          <div id="equity" class="big">$--</div>
+          <div id="accountLine" class="muted small">Loading account...</div>
+        </div>
+
+        <div class="row">
+          <span class="muted">Symbol</span>
+          <span id="symbol" class="value">--</span>
+        </div>
+      </div>
+
+      <div class="card span-5">
+        <div class="card-title">
+          <span>Bot Status</span>
+          <span id="updatedAt" class="muted">--</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Trading</span>
+          <span id="tradingStatus" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Tick Execution</span>
+          <span id="tickExecution" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Daily Risk Disabled</span>
+          <span id="riskDisabled" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Current Trade Date</span>
+          <span id="tradeDate" class="value">--</span>
+        </div>
+
+        <div class="actions">
+          <button class="primary" onclick="refreshAll()">Refresh</button>
+          <button onclick="toggleSecrets()">Keys</button>
+        </div>
+      </div>
+
+      <div class="card span-4">
+        <div class="card-title">
+          <span>Position</span>
+          <span id="positionPill" class="pill">Flat</span>
+        </div>
+
+        <div id="positionMain" class="metric">Flat</div>
+        <div id="positionSub" class="muted small">No open broker position detected</div>
+
+        <div class="actions">
+          <button class="danger" onclick="flattenPosition()">Flatten</button>
+          <button onclick="loadPositions()">Reload</button>
+        </div>
+      </div>
+
+      <div class="card span-4">
+        <div class="card-title">
+          <span>P/L</span>
+          <span class="muted">Broker</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Today</span>
+          <span id="todayPnl" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Realized</span>
+          <span id="realizedPnl" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Unrealized</span>
+          <span id="unrealizedPnl" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Commission</span>
+          <span id="commission" class="value">--</span>
+        </div>
+      </div>
+
+      <div class="card span-4">
+        <div class="card-title">
+          <span>Controls</span>
+          <span class="muted">Protected</span>
+        </div>
+
+        <div class="actions">
+          <button class="warning" onclick="pauseBot()">Pause</button>
+          <button class="success" onclick="resumeBot()">Resume</button>
+        </div>
+
+        <div class="row">
+          <span class="muted">TP / SL</span>
+          <span id="tpSl" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Qty</span>
+          <span id="qty" class="value">--</span>
+        </div>
+      </div>
+
+      <div class="card span-6">
+        <div class="card-title">
+          <span>Risk State</span>
+          <span class="muted">Local bot</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Daily P/L</span>
+          <span id="riskDailyPnl" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Broker Unrealized</span>
+          <span id="riskUnrealized" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Consecutive Losses</span>
+          <span id="consecutiveLosses" class="value">--</span>
+        </div>
+      </div>
+
+      <div class="card span-6">
+        <div class="card-title">
+          <span>Raw Broker Position</span>
+          <span class="muted">Debug</span>
+        </div>
+
+        <pre id="rawPosition" class="small muted" style="white-space: pre-wrap; margin: 0;">Loading...</pre>
+      </div>
+    </section>
+
+    <div class="footer">
+      MNQ Trading Bot Dashboard · Keep SIM until every control is fully tested
+    </div>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const API_BASE = window.location.origin;
+
+    const state = {
+      apiKey: localStorage.getItem('mnqBotApiKey') || '',
+      controlToken: localStorage.getItem('mnqBotControlToken') || ''
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function money(value) {
+      const n = Number(value || 0);
+      return n.toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 2
+      });
+    }
+
+    function pnlClass(value) {
+      const n = Number(value || 0);
+      if (n > 0) return 'good-text';
+      if (n < 0) return 'bad-text';
+      return '';
+    }
+
+    function setText(id, value) {
+      $(id).textContent = value;
+    }
+
+    function showToast(message) {
+      const toast = $('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 3500);
+    }
+
+    function toggleSecrets() {
+      $('secretPanel').classList.toggle('show');
+      $('apiKeyInput').value = state.apiKey;
+      $('controlTokenInput').value = state.controlToken;
+    }
+
+    function saveSecrets() {
+      state.apiKey = $('apiKeyInput').value.trim();
+      state.controlToken = $('controlTokenInput').value.trim();
+
+      localStorage.setItem('mnqBotApiKey', state.apiKey);
+      localStorage.setItem('mnqBotControlToken', state.controlToken);
+
+      $('secretPanel').classList.remove('show');
+      showToast('Saved dashboard keys on this device.');
+      refreshAll();
+    }
+
+    function clearSecrets() {
+      state.apiKey = '';
+      state.controlToken = '';
+
+      localStorage.removeItem('mnqBotApiKey');
+      localStorage.removeItem('mnqBotControlToken');
+
+      $('apiKeyInput').value = '';
+      $('controlTokenInput').value = '';
+
+      showToast('Cleared dashboard keys.');
+    }
+
+    async function apiGet(path) {
+      if (!state.apiKey) {
+        $('secretPanel').classList.add('show');
+        throw new Error('Missing API key');
+      }
+
+      const res = await fetch(`${API_BASE}${path}`, {
+        headers: {
+          'x-bot-api-key': state.apiKey
+        }
+      });
+
+      const json = await res.json();
+
+      if (!res.ok || json.ok === false) {
+        throw new Error(json.error || `Request failed: ${res.status}`);
+      }
+
+      return json;
+    }
+
+    async function apiPost(path) {
+      if (!state.apiKey || !state.controlToken) {
+        $('secretPanel').classList.add('show');
+        throw new Error('Missing API key or control token');
+      }
+
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-bot-api-key': state.apiKey,
+          'x-bot-control-token': state.controlToken
+        },
+        body: JSON.stringify({})
+      });
+
+      const json = await res.json();
+
+      if (!res.ok || json.ok === false) {
+        throw new Error(json.error || `Request failed: ${res.status}`);
+      }
+
+      return json;
+    }
+
+    async function loadHealth() {
+      const health = await apiGet('/api/health');
+
+      setText('symbol', health.symbol || '--');
+      setText('modePill', health.mode || 'SIM');
+      setText('connectionPill', 'Connected');
+      $('connectionPill').className = 'pill good';
+    }
+
+    async function loadStatus() {
+      const status = await apiGet('/api/status');
+      const bot = status.bot || {};
+      const risk = status.risk || {};
+
+      setText('tradingStatus', bot.enableTrading ? 'Enabled' : 'Paused');
+      $('tradingStatus').className = bot.enableTrading ? 'value good-text' : 'value warn-text';
+
+      setText('tickExecution', bot.useTickExecution ? 'Enabled' : 'Off');
+      setText('riskDisabled', risk.tradingDisabled ? 'Yes' : 'No');
+      $('riskDisabled').className = risk.tradingDisabled ? 'value bad-text' : 'value good-text';
+
+      setText('tradeDate', risk.currentTradeDate || '--');
+      setText('riskDailyPnl', money(risk.dailyPnL));
+      $('riskDailyPnl').className = `value ${pnlClass(risk.dailyPnL)}`;
+
+      setText('riskUnrealized', money(risk.brokerUnrealizedPnL));
+      $('riskUnrealized').className = `value ${pnlClass(risk.brokerUnrealizedPnL)}`;
+
+      setText('consecutiveLosses', risk.consecutiveLosses ?? '--');
+      setText('tpSl', `${bot.tp ?? '--'} / ${bot.sl ?? '--'} pts`);
+      setText('qty', bot.qty ?? '--');
+
+      setText('updatedAt', new Date(status.timestamp).toLocaleTimeString());
+    }
+
+    async function loadPositions() {
+      const positions = await apiGet('/api/positions');
+      const list = positions?.data?.Positions || [];
+
+      if (!list.length) {
+        setText('positionMain', 'Flat');
+        setText('positionSub', 'No open broker position detected');
+        setText('positionPill', 'Flat');
+        $('positionPill').className = 'pill';
+        setText('rawPosition', JSON.stringify(positions.data, null, 2));
+        return;
+      }
+
+      const p = list[0];
+      const qty = Number(p.Quantity || 0);
+      const side = qty > 0 ? 'Long' : 'Short';
+
+      setText('positionMain', `${side} ${Math.abs(qty)}`);
+      setText('positionSub', `${p.Symbol || 'MNQM26'} · Avg Price ${p.AveragePrice || p.AvgPrice || '--'}`);
+      setText('positionPill', side);
+      $('positionPill').className = qty > 0 ? 'pill good' : 'pill warn-text';
+
+      setText('rawPosition', JSON.stringify(list, null, 2));
+    }
+
+    async function loadBalances() {
+      const balances = await apiGet('/api/balances');
+      const balance = balances?.data?.Balances?.[0] || {};
+      const detail = balance.BalanceDetail || {};
+      const currency = balance.CurrencyDetails?.[0] || {};
+
+      const equity = balance.Equity ?? balance.CashBalance ?? 0;
+      const today = balance.TodaysProfitLoss ?? 0;
+      const realized = detail.RealizedProfitLoss ?? currency.RealizedProfitLoss ?? 0;
+      const unrealized = detail.UnrealizedProfitLoss ?? currency.UnrealizedProfitLoss ?? 0;
+
+      setText('equity', money(equity));
+      setText('accountLine', `${balance.AccountID || '--'} · ${balance.AccountType || 'Futures'}`);
+
+      setText('todayPnl', money(today));
+      $('todayPnl').className = `value ${pnlClass(today)}`;
+
+      setText('realizedPnl', money(realized));
+      $('realizedPnl').className = `value ${pnlClass(realized)}`;
+
+      setText('unrealizedPnl', money(unrealized));
+      $('unrealizedPnl').className = `value ${pnlClass(unrealized)}`;
+
+      setText('commission', money(balance.Commission ?? currency.Commission ?? 0));
+    }
+
+    async function refreshAll() {
+      try {
+        await Promise.all([
+          loadHealth(),
+          loadStatus(),
+          loadPositions(),
+          loadBalances()
+        ]);
+      } catch (err) {
+        setText('connectionPill', 'Disconnected');
+        $('connectionPill').className = 'pill bad-text';
+        showToast(err.message);
+      }
+    }
+
+    async function flattenPosition() {
+      const confirmed = confirm('Flatten broker position now? This can submit a market order.');
+      if (!confirmed) return;
+
+      try {
+        const result = await apiPost('/api/flatten');
+        showToast(result.message || 'Flatten request submitted.');
+        await refreshAll();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function pauseBot() {
+      try {
+        const result = await apiPost('/api/pause');
+        showToast(result.message || 'Bot paused.');
+        await refreshAll();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function resumeBot() {
+      try {
+        const result = await apiPost('/api/resume');
+        showToast(result.message || 'Bot resumed.');
+        await refreshAll();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    if (!state.apiKey) {
+      $('secretPanel').classList.add('show');
+    }
+
+    refreshAll();
+    setInterval(refreshAll, 15000);
+  </script>
+</body>
+</html>

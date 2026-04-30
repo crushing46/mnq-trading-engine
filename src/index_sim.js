@@ -12,6 +12,7 @@ const createDashboardApi = require('./routes/dashboardApi');
 
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = 3001;
 
@@ -424,7 +425,13 @@ app.get('/', async (req, res) => {
     res.status(500).send('Authorization failed.');
   }
 });
+// ================= DASHBOARD ROUTE =================
 
+app.get('/dashboard', (req, res) => {
+
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+
+});
 // ================= BOT LOGIC =================
 async function startBot() {
   try {
