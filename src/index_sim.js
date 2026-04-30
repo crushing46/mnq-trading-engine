@@ -8,6 +8,7 @@ const TradeStationAPI = require('./api/tradestation');
 const TradeLogger = require('./services/tradeLogger');
 const RiskManager = require('./services/riskManager');
 const PositionManager = require('./services/positionManager');
+const createDashboardApi = require('./routes/dashboardApi');
 
 const app = express();
 app.use(express.json());
@@ -122,6 +123,14 @@ const positionManager = new PositionManager({
   riskManager,
   tradeLogger
 });
+app.use('/api', createDashboardApi({
+  config: CONFIG,
+  tsApi,
+  positionManager,
+  riskManager,
+  tradeLogger,
+  getLiveBrokerPosition
+}));
 
 // ================= STREAM STATE =================
 let formingBar = null;
