@@ -73,6 +73,9 @@ const CONFIG = {
   accountId: process.env.ACCOUNT_ID,
   maxDailyLoss: Number(process.env.MAX_DAILY_LOSS || 0),
   useTickExecution: process.env.USE_TICK_EXECUTION === 'true',
+  enableEodFlatten: process.env.ENABLE_EOD_FLATTEN === 'true',
+  eodFlattenHourCt: Number(process.env.EOD_FLATTEN_HOUR_CT || 15),
+  eodFlattenMinuteCt: Number(process.env.EOD_FLATTEN_MINUTE_CT || 50),
   pointValue: Number(process.env.POINT_VALUE || 2)
 };
 
@@ -273,12 +276,36 @@ async function reconcileBrokerPosition() {
   }
 }
 
-async function handleEodFlatten(closedBar) {
-  const hour = closedBar.time.getHours();
-  const minute = closedBar.time.getMinutes();
+function getChicagoTimeParts(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(date);
 
-  if (hour === 15 && minute >= 50 && positionManager.hasPosition()) {
-    console.log('⏰ 3:50 PM CT — AUTO FLATTEN');
+  const lookup = Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+
+  return {
+    hour: Number(lookup.hour),
+    minute: Number(lookup.minute),
+    second: Number(lookup.second)
+  };
+}
+
+async function handleEodFlatten(closedBar) {
+  const { hour, minute } = getChicagoTimeParts(closedBar.time);
+
+  if (
+    CONFIG.enableEodFlatten &&
+    hour === CONFIG.eodFlattenHourCt &&
+    minute >= CONFIG.eodFlattenMinuteCt &&
+    positionManager.hasPosition()
+  ) {
+    console.log('⏰ EOD AUTO FLATTEN');
 
     await positionManager.flattenBrokerPosition('EOD_FLATTEN', closedBar.close);
 
