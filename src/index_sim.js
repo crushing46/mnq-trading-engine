@@ -561,7 +561,7 @@ async function startBot() {
     } catch (err) {
       console.error('⚠️ Failed to sync broker positions:', err.message);
     }
-    } catch {
+  } catch {
     const authUrl = tsApi.getAuthorizationUrl();
 
     console.log('\n🔐 AUTHORIZATION REQUIRED\n');
@@ -574,11 +574,13 @@ async function startBot() {
   }
 
   console.log('🚀 Starting MNQ Bot...');
+
   await notifier.sendBotStarted({
     symbol: CONFIG.symbol,
     accountId: CONFIG.accountId,
     mode: process.env.BOT_MODE || 'SIM'
   });
+
   let hist;
 
   try {
