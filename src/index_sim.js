@@ -62,6 +62,8 @@ const CONFIG = {
   qty: Number(process.env.CONTRACT_SIZE || 2),
   tp: Number(process.env.TP_POINTS || 40),
   sl: Number(process.env.SL_POINTS || 40),
+  beTriggerPoints: Number(process.env.BE_TRIGGER_POINTS || 40),
+  beOffsetPoints: Number(process.env.BE_OFFSET_POINTS || 2),
   emaFast: Number(process.env.EMA_FAST),
   emaSlow: Number(process.env.EMA_SLOW),
   emaTrend: Number(process.env.EMA_TREND),

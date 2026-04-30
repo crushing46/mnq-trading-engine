@@ -318,16 +318,19 @@ class PositionManager {
     this.position.maxFavorable = Math.max(this.position.maxFavorable, move);
     this.position.maxAdverse = Math.min(this.position.maxAdverse, move);
 
-    if (!this.position.beAdjusted && move >= 25) {
+    const beTriggerPoints = Number(this.config.beTriggerPoints || 40);
+    const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
+
+    if (!this.position.beAdjusted && move >= beTriggerPoints) {
       for (const leg of this.position.legs) {
         leg.stopLoss =
           this.position.side === 'LONG'
-            ? this.position.entryPrice + 2
-            : this.position.entryPrice - 2;
+            ? this.position.entryPrice + beOffsetPoints
+            : this.position.entryPrice - beOffsetPoints;
       }
 
       this.position.beAdjusted = true;
-      console.log(`🔒 MOVE SL TO BE+2`);
+      console.log(`🔒 MOVE SL TO BE+${beOffsetPoints} | Trigger=${beTriggerPoints}pts | Source=${source}`);
     }
 
     for (const leg of this.position.legs) {
@@ -387,6 +390,29 @@ class PositionManager {
     if (!this.position) return;
 
     this.lastKnownPrice = closedBar.close;
+
+    const barMove =
+      this.position.side === 'LONG'
+        ? closedBar.high - this.position.entryPrice
+        : this.position.entryPrice - closedBar.low;
+
+    this.position.maxFavorable = Math.max(this.position.maxFavorable, barMove);
+    this.position.maxAdverse = Math.min(this.position.maxAdverse, barMove);
+
+    const beTriggerPoints = Number(this.config.beTriggerPoints || 40);
+    const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
+
+    if (!this.position.beAdjusted && barMove >= beTriggerPoints) {
+      for (const leg of this.position.legs) {
+        leg.stopLoss =
+          this.position.side === 'LONG'
+            ? this.position.entryPrice + beOffsetPoints
+            : this.position.entryPrice - beOffsetPoints;
+      }
+
+      this.position.beAdjusted = true;
+      console.log(`🔒 MOVE SL TO BE+${beOffsetPoints} | Trigger=${beTriggerPoints}pts | Source=BAR`);
+    }
 
     for (const leg of this.position.legs) {
       if (!leg.active) continue;
