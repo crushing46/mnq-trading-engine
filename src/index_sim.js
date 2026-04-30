@@ -244,9 +244,10 @@ async function reconcileBrokerPosition() {
       return;
     }
 
-    // If broker qty matches remaining open internal legs, do NOT recreate position.
-    // This is the key runner fix.
+    // If broker qty matches remaining open internal legs, preserve the current
+    // leg/runner state, but still allow the broker average fill price to sync.
     if (absBrokerQty === localOpenQty) {
+      positionManager.syncFromBrokerPosition(livePos);
       return;
     }
 

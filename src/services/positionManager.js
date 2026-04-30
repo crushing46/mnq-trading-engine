@@ -197,9 +197,14 @@ class PositionManager {
     if (!this.position) return;
 
     const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
+    this.position.entryPrice = entryPrice;
 
     for (const leg of this.position.legs) {
       if (!leg.active) continue;
+
+      // Once the runner is trailing, preserve its dynamic stop. Broker avg-price
+      // reconciliation should not reset a trailing runner back to BE+offset.
+      if (leg.id === 'runner' && leg.trailing) continue;
 
       if (this.position.side === 'LONG') {
         if (leg.id === 'fixed') {
