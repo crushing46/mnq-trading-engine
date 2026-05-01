@@ -416,7 +416,8 @@ class PositionManager {
       console.log(`🔒 MOVE SL TO BE+${beOffsetPoints} | Trigger=${beTriggerPoints}pts | Source=${source}`);
     }
 
-    for (const leg of this.position.legs) {
+    for (const leg of [...this.position.legs]) {
+      if (!this.position) return;
       if (!leg.active) continue;
 
       const hitTP =
@@ -449,6 +450,8 @@ class PositionManager {
 
         continue;
       }
+
+      if (!this.position) return;
 
       if (leg.id === 'runner' && leg.trailing && leg.active) {
         const newStop =
@@ -497,7 +500,8 @@ class PositionManager {
       console.log(`🔒 MOVE SL TO BE+${beOffsetPoints} | Trigger=${beTriggerPoints}pts | Source=BAR`);
     }
 
-    for (const leg of this.position.legs) {
+    for (const leg of [...this.position.legs]) {
+      if (!this.position) return;
       if (!leg.active) continue;
 
       const hitTP =
@@ -530,6 +534,8 @@ class PositionManager {
 
         continue;
       }
+
+      if (!this.position) return;
 
       if (leg.id === 'runner' && leg.trailing && leg.active) {
         const newStop =
