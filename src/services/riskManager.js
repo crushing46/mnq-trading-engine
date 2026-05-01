@@ -36,9 +36,9 @@ class RiskManager {
       this.consecutiveLosses = 0;
     }
 
-    if (this.consecutiveLosses >= 3) {
+    if (this.consecutiveLosses >= 5) {
       this.tradingDisabled = true;
-      console.log('🛑 3 CONSECUTIVE LOSSES — TRADING DISABLED');
+      console.log('🛑 5 CONSECUTIVE LOSSES — TRADING DISABLED');
     }
 
     if (this.maxDailyLoss > 0 && this.dailyPnL <= -this.maxDailyLoss) {
