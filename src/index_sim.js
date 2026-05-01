@@ -73,6 +73,9 @@ const CONFIG = {
   trailDistance: Number(process.env.TRAIL_DISTANCE || 40),
   accountId: process.env.ACCOUNT_ID,
   maxDailyLoss: Number(process.env.MAX_DAILY_LOSS || 0),
+  enableDailyLossLimit: process.env.ENABLE_DAILY_LOSS_LIMIT !== 'false',
+  enableConsecutiveLossLimit: process.env.ENABLE_CONSECUTIVE_LOSS_LIMIT !== 'false',
+  maxConsecutiveLosses: Number(process.env.MAX_CONSECUTIVE_LOSSES || 5),
   useTickExecution: process.env.USE_TICK_EXECUTION === 'true',
   enableEodFlatten: process.env.ENABLE_EOD_FLATTEN === 'true',
   eodFlattenHourCt: Number(process.env.EOD_FLATTEN_HOUR_CT || 15),
@@ -121,7 +124,10 @@ const tradeLogger = new TradeLogger({
 });
 
 const riskManager = new RiskManager({
-  maxDailyLoss: CONFIG.maxDailyLoss
+  maxDailyLoss: CONFIG.maxDailyLoss,
+  enableDailyLossLimit: CONFIG.enableDailyLossLimit,
+  enableConsecutiveLossLimit: CONFIG.enableConsecutiveLossLimit,
+  maxConsecutiveLosses: CONFIG.maxConsecutiveLosses
 });
 
 const positionManager = new PositionManager({

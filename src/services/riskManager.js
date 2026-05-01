@@ -1,6 +1,15 @@
 class RiskManager {
-  constructor({ maxDailyLoss }) {
+  constructor({
+    maxDailyLoss,
+    enableDailyLossLimit = true,
+    enableConsecutiveLossLimit = true,
+    maxConsecutiveLosses = 5
+  }) {
     this.maxDailyLoss = Number(maxDailyLoss || 0);
+    this.enableDailyLossLimit = enableDailyLossLimit !== false;
+    this.enableConsecutiveLossLimit = enableConsecutiveLossLimit !== false;
+    this.maxConsecutiveLosses = Number(maxConsecutiveLosses || 5);
+
     this.dailyPnL = 0;
     this.brokerDailyPnL = 0;
     this.brokerRealizedPnL = 0;
@@ -36,12 +45,20 @@ class RiskManager {
       this.consecutiveLosses = 0;
     }
 
-    if (this.consecutiveLosses >= 5) {
+    if (
+      this.enableConsecutiveLossLimit &&
+      this.maxConsecutiveLosses > 0 &&
+      this.consecutiveLosses >= this.maxConsecutiveLosses
+    ) {
       this.tradingDisabled = true;
-      console.log('🛑 5 CONSECUTIVE LOSSES — TRADING DISABLED');
+      console.log(`🛑 ${this.maxConsecutiveLosses} CONSECUTIVE LOSSES — TRADING DISABLED`);
     }
 
-    if (this.maxDailyLoss > 0 && this.dailyPnL <= -this.maxDailyLoss) {
+    if (
+      this.enableDailyLossLimit &&
+      this.maxDailyLoss > 0 &&
+      this.dailyPnL <= -this.maxDailyLoss
+    ) {
       this.tradingDisabled = true;
       console.log(
         `🚨 LOCAL DAILY LOSS LIMIT HIT | DailyPnL=$${this.dailyPnL.toFixed(2)} | Limit=$${this.maxDailyLoss}`
@@ -66,7 +83,11 @@ class RiskManager {
     const brokerExposure = brokerDailyPnL + brokerOpenPnL;
     const worstExposure = Math.min(localExposure, brokerExposure);
 
-    if (this.maxDailyLoss > 0 && worstExposure <= -this.maxDailyLoss) {
+    if (
+      this.enableDailyLossLimit &&
+      this.maxDailyLoss > 0 &&
+      worstExposure <= -this.maxDailyLoss
+    ) {
       this.tradingDisabled = true;
       console.log(
         `🚨 DAILY LOSS BREACH | LocalExposure=$${localExposure.toFixed(2)} | BrokerExposure=$${brokerExposure.toFixed(2)} | Limit=$${this.maxDailyLoss}`
@@ -90,6 +111,22 @@ class RiskManager {
     console.log(`✅ Trading enabled | Reason=${reason}`);
   }
 
+  setRiskLimitsEnabled({ dailyLossLimit, consecutiveLossLimit }) {
+    if (typeof dailyLossLimit === 'boolean') {
+      this.enableDailyLossLimit = dailyLossLimit;
+    }
+
+    if (typeof consecutiveLossLimit === 'boolean') {
+      this.enableConsecutiveLossLimit = consecutiveLossLimit;
+    }
+
+    console.log(
+      `🧯 Risk limits updated | DailyLoss=${this.enableDailyLossLimit ? 'ON' : 'OFF'} | ConsecutiveLoss=${this.enableConsecutiveLossLimit ? 'ON' : 'OFF'}`
+    );
+
+    return this.getState();
+  }
+
   getState() {
     return {
       dailyPnL: this.dailyPnL,
@@ -97,6 +134,10 @@ class RiskManager {
       brokerRealizedPnL: this.brokerRealizedPnL,
       brokerUnrealizedPnL: this.brokerUnrealizedPnL,
       consecutiveLosses: this.consecutiveLosses,
+      maxDailyLoss: this.maxDailyLoss,
+      maxConsecutiveLosses: this.maxConsecutiveLosses,
+      enableDailyLossLimit: this.enableDailyLossLimit,
+      enableConsecutiveLossLimit: this.enableConsecutiveLossLimit,
       tradingDisabled: this.tradingDisabled,
       currentTradeDate: this.currentTradeDate
     };

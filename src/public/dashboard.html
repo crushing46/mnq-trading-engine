@@ -786,6 +786,24 @@
       }
     }
 
+    async function setRiskLimits(dailyLossLimit, consecutiveLossLimit) {
+      const actionText = dailyLossLimit || consecutiveLossLimit ? 'enable' : 'disable';
+      const confirmed = confirm(`Are you sure you want to ${actionText} daily/consecutive risk limits?`);
+      if (!confirmed) return;
+
+      try {
+        const result = await apiPost('/api/risk-limits', {
+          dailyLossLimit,
+          consecutiveLossLimit
+        });
+
+        showToast(result.message || 'Risk limits updated.');
+        await refreshAll();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
     if (!state.apiKey) {
       $('secretPanel').classList.add('show');
     }

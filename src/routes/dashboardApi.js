@@ -290,6 +290,36 @@ function createDashboardApi({
     }
   });
 
+  router.post('/risk-limits', requireControlToken, (req, res) => {
+    try {
+      const { dailyLossLimit, consecutiveLossLimit } = req.body || {};
+
+      if (typeof riskManager.setRiskLimitsEnabled !== 'function') {
+        return res.status(500).json({
+          ok: false,
+          error: 'Risk manager does not support runtime risk limit updates.'
+        });
+      }
+
+      const risk = riskManager.setRiskLimitsEnabled({
+        dailyLossLimit,
+        consecutiveLossLimit
+      });
+
+      res.json({
+        ok: true,
+        message: 'Risk limits updated.',
+        timestamp: new Date().toISOString(),
+        risk
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err.message
+      });
+    }
+  });
+
   return router;
 }
 
