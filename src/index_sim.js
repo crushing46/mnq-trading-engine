@@ -429,12 +429,15 @@ async function handleStreamBar(tick) {
     await updateBrokerPnLAndEnforceRisk();
     await reconcileBrokerPosition();
 
-    // Safety: always evaluate bar TP/SL as a backup.
-    // Even when USE_TICK_EXECUTION=true, this catches missed stream updates.
-    try {
-      await positionManager.checkExitsByBar(closedBar);
-    } catch (err) {
-      logSafeError('Bar exit check failed', err);
+    // Bar-based exits are only used when tick execution is disabled.
+    // With USE_TICK_EXECUTION=true, bar exits can falsely trigger on the same candle
+    // because OHLC data does not preserve the order of high/low events.
+    if (!CONFIG.useTickExecution) {
+      try {
+        await positionManager.checkExitsByBar(closedBar);
+      } catch (err) {
+        logSafeError('Bar exit check failed', err);
+      }
     }
 
     if (!riskManager.canTrade()) {
