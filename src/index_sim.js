@@ -10,6 +10,7 @@ const RiskManager = require('./services/riskManager');
 const PositionManager = require('./services/positionManager');
 const createDashboardApi = require('./routes/dashboardApi');
 const Notifier = require('./services/notifier');
+const { sendPushover } = require('./services/pushover');
 
 const app = express();
 app.use(express.json());
@@ -56,7 +57,11 @@ process.on('unhandledRejection', (err) => {
 process.on('uncaughtException', (err) => {
   logSafeError('Uncaught exception caught — bot will keep running if possible', err);
 });
+const PROFIT_LOCK_ENABLED = process.env.PROFIT_LOCK_ENABLED === 'true';
+const MAX_SESSION_PROFIT = Number(process.env.MAX_SESSION_PROFIT || 1500);
+const DASHBOARD_URL = process.env.DASHBOARD_URL || 'http://159.223.113.118:3001/dashboard';
 
+let profitLockTriggered = false;
 // ================= CONFIG =================
 const CONFIG = {
   symbol: normalizeTradeStationSymbol(process.env.SYMBOL),
@@ -149,7 +154,15 @@ app.use('/api', createDashboardApi({
   riskManager,
   tradeLogger,
   strategy,
-  getLiveBrokerPosition
+  getLiveBrokerPosition,
+  getProfitLockState: () => ({
+    enabled: PROFIT_LOCK_ENABLED,
+    triggered: profitLockTriggered,
+    maxSessionProfit: MAX_SESSION_PROFIT
+  }),
+  resetProfitLock: () => {
+    profitLockTriggered = false;
+  }
 }));
 
 // ================= STREAM STATE =================
@@ -166,6 +179,40 @@ async function getLiveBrokerPosition() {
       p.Symbol === CONFIG.symbol &&
       Number(p.Quantity) !== 0
   );
+}
+
+async function checkProfitLock({ realizedPnL = 0, unrealizedPnL = 0 }) {
+  if (!PROFIT_LOCK_ENABLED) return false;
+
+  const realized = Number(realizedPnL || 0);
+  const unrealized = Number(unrealizedPnL || 0);
+  const totalProfit = realized + unrealized;
+
+  if (totalProfit < MAX_SESSION_PROFIT) return false;
+
+  if (!profitLockTriggered) {
+    profitLockTriggered = true;
+
+    console.log(
+      `🟢 PROFIT LOCK HIT | Realized=${realized.toFixed(2)} Unrealized=${unrealized.toFixed(2)} Total=${totalProfit.toFixed(2)} Limit=${MAX_SESSION_PROFIT.toFixed(2)}`
+    );
+
+    riskManager.disable('PROFIT_LOCK');
+
+    await sendPushover({
+      title: 'MNQ Bot Profit Lock Hit',
+      message: `Profit lock hit at $${totalProfit.toFixed(2)}. Trading has been paused. Open the dashboard to decide whether to continue trading.`,
+      priority: 1,
+      url: DASHBOARD_URL,
+      urlTitle: 'Open MNQ Dashboard'
+    });
+  }
+
+  if (positionManager.hasPosition()) {
+    await positionManager.flattenBrokerPosition('PROFIT_LOCK');
+  }
+
+  return true;
 }
 
 async function updateBrokerPnLAndEnforceRisk() {
@@ -199,6 +246,15 @@ async function updateBrokerPnLAndEnforceRisk() {
       balance?.OpenTradeProfitLoss ??
       0
     );
+
+    const profitLocked = await checkProfitLock({
+      realizedPnL: brokerRealizedPnL,
+      unrealizedPnL: brokerUnrealizedPnL
+    });
+
+    if (profitLocked) {
+      return;
+    }
 
     const breached = riskManager.updateBrokerPnL({
       dailyPnL: brokerDailyPnL,
