@@ -90,7 +90,7 @@ if (!CONFIG.symbol) {
   console.warn('⚠️ SYMBOL is undefined in .env');
 } else if (CONFIG.symbol.startsWith('@')) {
   console.error(`❌ Invalid TradeStation futures symbol: ${CONFIG.symbol}`);
-  console.error('TradeStation API should use MNQM26, not @MNQM26. Update SYMBOL in .env.');
+  console.error('TradeStation API should use NQM26, not @NQM26. Update SYMBOL in .env.');
   process.exit(1);
 } else {
   console.log(`✅ Symbol configured for TradeStation API: ${CONFIG.symbol}`);

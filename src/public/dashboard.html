@@ -705,10 +705,10 @@
 
       const p = list[0];
       const qty = Number(p.Quantity || 0);
-      const side = qty > 0 ? 'Long' : 'Short';
+      const side = qty > 0 ? 'LONG' : 'SHORT';
 
       setText('positionMain', `${side} ${Math.abs(qty)}`);
-      setText('positionSub', `${p.Symbol || 'MNQM26'} · Avg Price ${p.AveragePrice || p.AvgPrice || '--'}`);
+      setText('positionSub', `${p.Symbol || 'NQM26'} · Avg Price ${p.AveragePrice || p.AvgPrice || '--'}`);
       setText('positionPill', side);
       $('positionPill').className = qty > 0 ? 'pill good' : 'pill warn-text';
 
