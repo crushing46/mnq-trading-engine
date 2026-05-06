@@ -437,12 +437,14 @@ function logBarSync(closedBar) {
   });
 
   const syncStatus =
-    minutesBehindForming === 1
-      ? '✅ SYNCED: last closed bar is directly behind forming bar'
-      : `⚠️ CHECK: bar is ${minutesBehindForming} minute(s) behind forming bar`;
+    minutesBehindForming === 0
+      ? '✅ SYNCED: bar close/end time matches current forming bar start'
+      : minutesBehindForming === 1
+        ? '✅ SYNCED: prior start-labeled closed bar is directly behind forming bar'
+        : `⚠️ CHECK: bar label is ${minutesBehindForming} minute(s) behind forming bar`;
 
   console.log(
-    `🧭 BAR SYNC | ${syncStatus} | BotBarLabel=${barStartCt} | Covers=${barStartCt}→${barEndCt} | FormingNow=${formingCt} | ProcessedAt=${nowCt}`
+    `🧭 BAR SYNC | ${syncStatus} | InterpretedAsClose=${barStartCt} | Covers=${barStartCt}→${barEndCt} | FormingNow=${formingCt} | ProcessedAt=${nowCt}`
   );
 }
 
