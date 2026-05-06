@@ -166,7 +166,6 @@ app.use('/api', createDashboardApi({
 }));
 
 // ================= STREAM STATE =================
-let formingBar = null;
 let lastFinalizedMinute = null;
 
 // ================= HELPERS =================
@@ -431,25 +430,9 @@ async function handleStreamBar(tick) {
 
   const minuteTs = Math.floor(tick.time.getTime() / 60000) * 60000;
 
-  if (!formingBar) {
-    formingBar = {
-      minute: minuteTs,
-      open: tick.open,
-      high: tick.high,
-      low: tick.low,
-      close: tick.close,
-      volume: tick.volume || 0
-    };
-
-    return;
-  }
-
-  if (formingBar.minute === minuteTs) {
-    formingBar.high = Math.max(formingBar.high, tick.high);
-    formingBar.low = Math.min(formingBar.low, tick.low);
-    formingBar.close = tick.close;
-    formingBar.volume += tick.volume || 0;
-
+  // TradeStation streamBars appears to deliver completed 1-minute bars.
+  // Process each completed bar immediately and ignore duplicate updates for the same minute.
+  if (minuteTs === lastFinalizedMinute) {
     await onTick({
       price: tick.close,
       time: tick.time
@@ -458,123 +441,106 @@ async function handleStreamBar(tick) {
     return;
   }
 
-  if (formingBar && formingBar.minute !== lastFinalizedMinute) {
-    lastFinalizedMinute = formingBar.minute;
+  lastFinalizedMinute = minuteTs;
 
-    const closedBar = {
-      time: new Date(formingBar.minute),
-      open: formingBar.open,
-      high: formingBar.high,
-      low: formingBar.low,
-      close: formingBar.close,
-      volume: formingBar.volume
-    };
-
-    riskManager.resetIfNewDay(closedBar.time);
-
-    let eodFlattened = false;
-
-    try {
-      eodFlattened = await handleEodFlatten(closedBar);
-    } catch (err) {
-      logSafeError('EOD flatten failed', err);
-    }
-    if (eodFlattened) {
-      rolloverFormingBar(tick, minuteTs);
-      return;
-    }
-
-    printBar(closedBar);
-
-    strategy.addBar(closedBar);
-
-    await updateBrokerPnLAndEnforceRisk();
-    await reconcileBrokerPosition();
-
-    // Bar-based exits are only used when tick execution is disabled.
-    // With USE_TICK_EXECUTION=true, bar exits can falsely trigger on the same candle
-    // because OHLC data does not preserve the order of high/low events.
-    if (!CONFIG.useTickExecution) {
-      try {
-        await positionManager.checkExitsByBar(closedBar);
-      } catch (err) {
-        logSafeError('Bar exit check failed', err);
-      }
-    }
-
-    if (!riskManager.canTrade()) {
-      console.log('🛑 Trading disabled for session');
-      rolloverFormingBar(tick, minuteTs);
-      return;
-    }
-
-    const signal = strategy.checkEntrySignal();
-
-    if (positionManager.hasPosition()) {
-      const currentPosition = positionManager.getPosition();
-
-      if (
-        signal &&
-        signal.type &&
-        signal.type !== currentPosition.side
-      ) {
-        try {
-          await positionManager.flipPosition({
-            newSide: signal.type,
-            price: closedBar.close,
-            time: closedBar.time
-          });
-        } catch (err) {
-          logSafeError('Flip position failed — broker state not changed locally by index_sim.js', err);
-        }
-
-        rolloverFormingBar(tick, minuteTs);
-        return;
-      }
-    }
-
-    if (!positionManager.hasPosition()) {
-      if (signal && signal.type) {
-        console.log(
-          `📈 ENTRY SIGNAL | Side=${signal.type} | Entry=${closedBar.close} | FixedTP=${
-            signal.type === 'LONG'
-              ? closedBar.close + CONFIG.tp
-              : closedBar.close - CONFIG.tp
-          } | SL=${
-            signal.type === 'LONG'
-              ? closedBar.close - CONFIG.sl
-              : closedBar.close + CONFIG.sl
-          }`
-        );
-
-        try {
-          await positionManager.enterTargetPosition({
-            side: signal.type,
-            entryPrice: closedBar.close,
-            entryTime: closedBar.time
-          });
-        } catch (err) {
-          logSafeError('Entry order failed — bot will stay flat unless broker confirms otherwise', err);
-        }
-      } else {
-        console.log('⏭ No entry');
-      }
-    }
-  }
-
-  rolloverFormingBar(tick, minuteTs);
-}
-
-function rolloverFormingBar(tick, minuteTs) {
-  formingBar = {
-    minute: minuteTs,
+  const closedBar = {
+    time: new Date(minuteTs),
     open: tick.open,
     high: tick.high,
     low: tick.low,
     close: tick.close,
     volume: tick.volume || 0
   };
+
+  riskManager.resetIfNewDay(closedBar.time);
+
+  let eodFlattened = false;
+
+  try {
+    eodFlattened = await handleEodFlatten(closedBar);
+  } catch (err) {
+    logSafeError('EOD flatten failed', err);
+  }
+
+  if (eodFlattened) {
+    return;
+  }
+
+  printBar(closedBar);
+
+  strategy.addBar(closedBar);
+
+  await updateBrokerPnLAndEnforceRisk();
+  await reconcileBrokerPosition();
+
+  // Bar-based exits are only used when tick execution is disabled.
+  // With USE_TICK_EXECUTION=true, quote/tick exits manage TP/SL intrabar.
+  if (!CONFIG.useTickExecution) {
+    try {
+      await positionManager.checkExitsByBar(closedBar);
+    } catch (err) {
+      logSafeError('Bar exit check failed', err);
+    }
+  }
+
+  if (!riskManager.canTrade()) {
+    console.log('🛑 Trading disabled for session');
+    return;
+  }
+
+  const signal = strategy.checkEntrySignal();
+
+  if (positionManager.hasPosition()) {
+    const currentPosition = positionManager.getPosition();
+
+    if (
+      signal &&
+      signal.type &&
+      signal.type !== currentPosition.side
+    ) {
+      try {
+        await positionManager.flipPosition({
+          newSide: signal.type,
+          price: closedBar.close,
+          time: closedBar.time
+        });
+      } catch (err) {
+        logSafeError('Flip position failed — broker state not changed locally by index_sim.js', err);
+      }
+
+      return;
+    }
+  }
+
+  if (!positionManager.hasPosition()) {
+    if (signal && signal.type) {
+      console.log(
+        `📈 ENTRY SIGNAL | Side=${signal.type} | Entry=${closedBar.close} | FixedTP=${
+          signal.type === 'LONG'
+            ? closedBar.close + CONFIG.tp
+            : closedBar.close - CONFIG.tp
+        } | SL=${
+          signal.type === 'LONG'
+            ? closedBar.close - CONFIG.sl
+            : closedBar.close + CONFIG.sl
+        }`
+      );
+
+      try {
+        await positionManager.enterTargetPosition({
+          side: signal.type,
+          entryPrice: closedBar.close,
+          entryTime: closedBar.time
+        });
+      } catch (err) {
+        logSafeError('Entry order failed — bot will stay flat unless broker confirms otherwise', err);
+      }
+    } else {
+      console.log('⏭ No entry');
+    }
+  }
 }
+
 
 // ================= CALLBACK ROUTE =================
 app.get('/', async (req, res) => {
