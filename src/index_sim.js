@@ -405,6 +405,47 @@ function printBar(closedBar) {
   );
 }
 
+function logBarSync(closedBar) {
+  const now = new Date();
+
+  const barStart = closedBar.time;
+  const barEnd = new Date(barStart.getTime() + 60_000);
+  const formingStart = new Date(Math.floor(now.getTime() / 60000) * 60000);
+
+  const minutesBehindForming = Math.round(
+    (formingStart.getTime() - barStart.getTime()) / 60000
+  );
+
+  const barStartCt = barStart.toLocaleTimeString('en-US', {
+    timeZone: 'America/Chicago',
+    hour12: true
+  });
+
+  const barEndCt = barEnd.toLocaleTimeString('en-US', {
+    timeZone: 'America/Chicago',
+    hour12: true
+  });
+
+  const formingCt = formingStart.toLocaleTimeString('en-US', {
+    timeZone: 'America/Chicago',
+    hour12: true
+  });
+
+  const nowCt = now.toLocaleTimeString('en-US', {
+    timeZone: 'America/Chicago',
+    hour12: true
+  });
+
+  const syncStatus =
+    minutesBehindForming === 1
+      ? '✅ SYNCED: last closed bar is directly behind forming bar'
+      : `⚠️ CHECK: bar is ${minutesBehindForming} minute(s) behind forming bar`;
+
+  console.log(
+    `🧭 BAR SYNC | ${syncStatus} | BotBarLabel=${barStartCt} | Covers=${barStartCt}→${barEndCt} | FormingNow=${formingCt} | ProcessedAt=${nowCt}`
+  );
+}
+
 // ================= TICK/BAR HANDLING =================
 async function onTick(tick) {
   if (!tick || !Number.isFinite(tick.price)) return;
@@ -467,6 +508,7 @@ async function handleStreamBar(tick) {
   }
 
   printBar(closedBar);
+  logBarSync(closedBar);
 
   strategy.addBar(closedBar);
 
