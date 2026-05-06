@@ -184,6 +184,43 @@ class TradeStationAPI {
         console.log(`✅ Bar stream connected for ${symbol}`);
 
         let buffer = '';
+        let currentBar = null;
+        let lastEmittedMinute = null;
+
+        const normalizeBar = (b) => {
+          const time = new Date(b.TimeStamp);
+          const minute = Math.floor(time.getTime() / 60000) * 60000;
+
+          return {
+            minute,
+            time: new Date(minute),
+            open: Number(b.Open),
+            high: Number(b.High),
+            low: Number(b.Low),
+            close: Number(b.Close),
+            volume: Number(b.TotalVolume || b.Volume || 0),
+            barStatus: b.BarStatus,
+            rawTimeStamp: b.TimeStamp
+          };
+        };
+
+        const emitCompletedBar = (bar) => {
+          if (!bar || bar.minute === lastEmittedMinute) return;
+          if (!Number.isFinite(bar.open) || !Number.isFinite(bar.high) || !Number.isFinite(bar.low) || !Number.isFinite(bar.close)) return;
+
+          lastEmittedMinute = bar.minute;
+
+          onBar({
+            time: bar.time,
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+            volume: bar.volume || 0,
+            barStatus: bar.barStatus || 'FinalizedByRollover',
+            rawTimeStamp: bar.rawTimeStamp
+          });
+        };
 
         res.data.on('data', (chunk) => {
           buffer += chunk.toString();
@@ -209,17 +246,49 @@ class TradeStationAPI {
             try {
               const b = JSON.parse(jsonStr);
 
-              if (b.BarStatus !== 'Closed') continue;
+              if (!b || !b.TimeStamp) continue;
 
-              onBar({
-                time: new Date(b.TimeStamp),
-                open: +b.Open,
-                high: +b.High,
-                low: +b.Low,
-                close: +b.Close,
-                volume: +b.TotalVolume || 0,
-                barStatus: b.BarStatus
-              });
+              const nextBar = normalizeBar(b);
+
+              if (!currentBar) {
+                currentBar = nextBar;
+
+                if (nextBar.barStatus === 'Closed') {
+                  emitCompletedBar(nextBar);
+                  currentBar = null;
+                }
+
+                continue;
+              }
+
+              if (nextBar.minute === currentBar.minute) {
+                currentBar = {
+                  ...currentBar,
+                  high: Math.max(currentBar.high, nextBar.high),
+                  low: Math.min(currentBar.low, nextBar.low),
+                  close: nextBar.close,
+                  volume: Math.max(currentBar.volume || 0, nextBar.volume || 0),
+                  barStatus: nextBar.barStatus,
+                  rawTimeStamp: nextBar.rawTimeStamp
+                };
+
+                if (nextBar.barStatus === 'Closed') {
+                  emitCompletedBar(currentBar);
+                  currentBar = null;
+                }
+
+                continue;
+              }
+
+              // A new minute has started. Finalize the prior minute immediately from the latest streamed values
+              // instead of waiting for a potentially delayed TradeStation Closed event.
+              emitCompletedBar(currentBar);
+              currentBar = nextBar;
+
+              if (nextBar.barStatus === 'Closed') {
+                emitCompletedBar(nextBar);
+                currentBar = null;
+              }
             } catch {
               // Ignore malformed stream event
             }
