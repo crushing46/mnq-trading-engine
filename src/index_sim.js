@@ -163,7 +163,14 @@ app.use('/api', createDashboardApi({
   }),
   resetProfitLock: () => {
     profitLockTriggered = false;
-    },
+  },
+  toggleProfitLock: (enabled) => {
+    profitLockEnabledRuntime = enabled;
+
+    console.log(
+      `🔐 PROFIT LOCK ${enabled ? 'ENABLED' : 'DISABLED'} FROM DASHBOARD`
+    );
+  },
   toggleProfitLock: (enabled) => {
     profitLockEnabledRuntime = enabled;
 

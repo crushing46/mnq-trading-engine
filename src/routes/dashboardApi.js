@@ -50,7 +50,8 @@ function createDashboardApi({
   riskManager,
   tradeLogger,
   strategy,
-  getLiveBrokerPosition
+  getLiveBrokerPosition,
+  toggleProfitLock
 }) {
   const express = require('express');
   const router = express.Router();
@@ -311,6 +312,33 @@ function createDashboardApi({
         message: 'Risk limits updated.',
         timestamp: new Date().toISOString(),
         risk
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err.message
+      });
+    }
+  });
+
+  router.post('/toggle-profit-lock', requireControlToken, (req, res) => {
+    try {
+      const enabled = Boolean(req.body.enabled);
+
+      if (typeof toggleProfitLock !== 'function') {
+        return res.status(500).json({
+          ok: false,
+          error: 'toggleProfitLock is not available.'
+        });
+      }
+
+      toggleProfitLock(enabled);
+
+      res.json({
+        ok: true,
+        message: `Profit lock ${enabled ? 'enabled' : 'disabled'}.`,
+        timestamp: new Date().toISOString(),
+        enabled
       });
     } catch (err) {
       res.status(500).json({

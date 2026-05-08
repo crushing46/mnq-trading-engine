@@ -434,6 +434,16 @@
           <button class="primary" onclick="setRiskLimits(true, true)">Risk On</button>
         </div>
 
+        <div class="actions" style="margin-top:10px;">
+          <button class="danger" onclick="toggleProfitLock(false)">
+            Profit Lock Off
+          </button>
+
+          <button class="primary" onclick="toggleProfitLock(true)">
+            Profit Lock On
+          </button>
+        </div>
+
         <div class="row">
           <span class="muted">TP / SL</span>
           <span id="tpSl" class="value">--</span>
@@ -800,6 +810,36 @@
         });
 
         showToast(result.message || 'Risk limits updated.');
+        await refreshAll();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function toggleProfitLock(enabled) {
+      const actionText = enabled ? 'enable' : 'disable';
+
+      const confirmed = confirm(`Are you sure you want to ${actionText} Profit Lock?`);
+      if (!confirmed) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/api/toggle-profit-lock`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-bot-api-key': state.apiKey,
+            'x-bot-control-token': state.controlToken
+          },
+          body: JSON.stringify({ enabled })
+        });
+
+        const result = await res.json();
+
+        if (!res.ok || result.ok === false) {
+          throw new Error(result.error || 'Failed to update Profit Lock');
+        }
+
+        showToast(result.message || 'Profit Lock updated.');
         await refreshAll();
       } catch (err) {
         showToast(err.message);
