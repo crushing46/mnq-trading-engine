@@ -410,13 +410,15 @@ async function handleEodFlatten(closedBar) {
 }
 
 function printBar(closedBar) {
-  const local = closedBar.time.toLocaleString('en-US', {
+  const local = closedBar.time.toLocaleTimeString('en-US', {
     timeZone: 'America/Chicago',
+    hour: '2-digit',
+    minute: '2-digit',
     hour12: true
   });
 
   console.log(
-    `📊 ${local} | O:${closedBar.open} H:${closedBar.high} L:${closedBar.low} C:${closedBar.close}`
+    `📊 ${local} | O:${closedBar.open} H:${closedBar.high} L:${closedBar.low} C:${closedBar.close} | ✅`
   );
 }
 
@@ -525,7 +527,7 @@ async function handleStreamBar(tick) {
   }
 
   printBar(closedBar);
-  logBarSync(closedBar);
+  
 
   strategy.addBar(closedBar);
 
