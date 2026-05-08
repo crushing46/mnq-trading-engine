@@ -236,6 +236,29 @@
       color: #1b1305;
     }
 
+    .badge {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .badge.green {
+      background: rgba(0, 200, 0, 0.15);
+      color: #4ade80;
+    }
+
+    .badge.red {
+      background: rgba(255, 0, 0, 0.15);
+      color: #f87171;
+    }
+
+    .badge.yellow {
+      background: rgba(255, 200, 0, 0.15);
+      color: #facc15;
+    }
+
     .footer {
       margin: 18px 0 6px;
       color: var(--muted);
@@ -456,6 +479,33 @@
 
       <div class="card span-6">
         <div class="card-title">
+          <span>Runtime Status</span>
+          <span class="muted">Live</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Trading</span>
+          <span id="tradingEnabledBadge" class="badge">--</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Profit Lock</span>
+          <span id="profitLockEnabledBadge" class="badge">--</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Profit Lock Hit</span>
+          <span id="profitLockTriggeredBadge" class="badge">--</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Risk Status</span>
+          <span id="riskStatusBadge" class="badge">--</span>
+        </div>
+      </div>
+
+      <div class="card span-6">
+        <div class="card-title">
           <span>Risk State</span>
           <span class="muted">Local bot</span>
         </div>
@@ -659,6 +709,36 @@
       setText('consecutiveLosses', risk.consecutiveLosses ?? '--');
       setText('tpSl', `${bot.tp ?? '--'} / ${bot.sl ?? '--'} pts`);
       setText('qty', bot.qty ?? '--');
+
+      const tradingBadge = document.getElementById('tradingEnabledBadge');
+      const profitLockEnabledBadge = document.getElementById('profitLockEnabledBadge');
+      const profitLockTriggeredBadge = document.getElementById('profitLockTriggeredBadge');
+      const riskStatusBadge = document.getElementById('riskStatusBadge');
+
+      const tradingEnabled = !risk.tradingDisabled;
+      const riskDisabledReason = risk.disabledReason || null;
+      const profitLock = live.profitLock || {};
+
+      tradingBadge.textContent = tradingEnabled ? 'ENABLED' : 'DISABLED';
+      tradingBadge.className = `badge ${tradingEnabled ? 'green' : 'red'}`;
+
+      profitLockEnabledBadge.textContent =
+        profitLock.enabled ? 'ON' : 'OFF';
+
+      profitLockEnabledBadge.className =
+        `badge ${profitLock.enabled ? 'yellow' : 'green'}`;
+
+      profitLockTriggeredBadge.textContent =
+        profitLock.triggered ? 'TRIGGERED' : 'CLEAR';
+
+      profitLockTriggeredBadge.className =
+        `badge ${profitLock.triggered ? 'red' : 'green'}`;
+
+      riskStatusBadge.textContent =
+        riskDisabledReason || 'NORMAL';
+
+      riskStatusBadge.className =
+        `badge ${riskDisabledReason ? 'red' : 'green'}`;
 
       if (localPosition) {
         const side = localPosition.side || '--';
