@@ -643,7 +643,7 @@
       return json;
     }
 
-    async function apiPost(path) {
+    async function apiPost(path, payload = {}) {
       if (!state.apiKey || !state.controlToken) {
         $('secretPanel').classList.add('show');
         throw new Error('Missing API key or control token');
@@ -656,7 +656,7 @@
           'x-bot-api-key': state.apiKey,
           'x-bot-control-token': state.controlToken
         },
-        body: JSON.stringify({})
+        body: JSON.stringify(payload)
       });
 
       const json = await res.json();
