@@ -293,7 +293,16 @@ function createDashboardApi({
 
   router.post('/risk-limits', requireControlToken, (req, res) => {
     try {
-      const { dailyLossLimit, consecutiveLossLimit } = req.body || {};
+      const rawDailyLossLimit = req.body?.dailyLossLimit;
+      const rawConsecutiveLossLimit = req.body?.consecutiveLossLimit;
+
+      const dailyLossLimit =
+        rawDailyLossLimit === true ||
+        rawDailyLossLimit === 'true';
+
+      const consecutiveLossLimit =
+        rawConsecutiveLossLimit === true ||
+        rawConsecutiveLossLimit === 'true';
 
       if (typeof riskManager.setRiskLimitsEnabled !== 'function') {
         return res.status(500).json({
@@ -323,7 +332,9 @@ function createDashboardApi({
 
   router.post('/toggle-profit-lock', requireControlToken, (req, res) => {
     try {
-      const enabled = Boolean(req.body.enabled);
+      const enabled =
+        req.body.enabled === true ||
+        req.body.enabled === 'true';
 
       if (typeof toggleProfitLock !== 'function') {
         return res.status(500).json({
