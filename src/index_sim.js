@@ -62,6 +62,7 @@ const MAX_SESSION_PROFIT = Number(process.env.MAX_SESSION_PROFIT || 1500);
 const DASHBOARD_URL = process.env.DASHBOARD_URL || 'http://159.223.113.118:3001/dashboard';
 
 let profitLockTriggered = false;
+let profitLockEnabledRuntime = PROFIT_LOCK_ENABLED
 // ================= CONFIG =================
 const CONFIG = {
   symbol: normalizeTradeStationSymbol(process.env.SYMBOL),
@@ -156,12 +157,19 @@ app.use('/api', createDashboardApi({
   strategy,
   getLiveBrokerPosition,
   getProfitLockState: () => ({
-    enabled: PROFIT_LOCK_ENABLED,
+    enabled: profitLockEnabledRuntime,
     triggered: profitLockTriggered,
     maxSessionProfit: MAX_SESSION_PROFIT
   }),
   resetProfitLock: () => {
     profitLockTriggered = false;
+    },
+  toggleProfitLock: (enabled) => {
+    profitLockEnabledRuntime = enabled;
+
+    console.log(
+      `🔐 PROFIT LOCK ${enabled ? 'ENABLED' : 'DISABLED'} FROM DASHBOARD`
+    );
   }
 }));
 
@@ -181,7 +189,7 @@ async function getLiveBrokerPosition() {
 }
 
 async function checkProfitLock({ realizedPnL = 0, unrealizedPnL = 0 }) {
-  if (!PROFIT_LOCK_ENABLED) return false;
+  if (!profitLockEnabledRuntime) return false;
 
   const realized = Number(realizedPnL || 0);
   const unrealized = Number(unrealizedPnL || 0);
