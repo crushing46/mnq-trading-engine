@@ -51,7 +51,8 @@ function createDashboardApi({
   tradeLogger,
   strategy,
   getLiveBrokerPosition,
-  toggleProfitLock
+  toggleProfitLock,
+  getProfitLockState
 }) {
   const express = require('express');
   const router = express.Router();
@@ -102,7 +103,11 @@ function createDashboardApi({
           lastKnownPrice: positionManager.lastKnownPrice ?? null
         },
         localPosition,
-        risk: riskState
+        risk: riskState,
+        profitLock:
+          typeof getProfitLockState === 'function'
+            ? getProfitLockState()
+            : null
       });
     } catch (err) {
       res.status(500).json({
@@ -140,7 +145,11 @@ function createDashboardApi({
           qty: config.qty
         },
         localPosition,
-        risk: riskState
+        risk: riskState,
+        profitLock:
+          typeof getProfitLockState === 'function'
+            ? getProfitLockState()
+            : null
       });
     } catch (err) {
       res.status(500).json({
