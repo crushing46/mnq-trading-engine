@@ -110,6 +110,7 @@ class PositionManager {
         }
       ],
       beAdjusted: false,
+      runnerBeActivated: false,
       maxFavorable: 0,
       maxAdverse: 0
     };
@@ -211,7 +212,10 @@ class PositionManager {
           leg.takeProfit = entryPrice + this.config.tp;
         }
 
-        if (this.position.beAdjusted) {
+        if (
+          this.position.beAdjusted &&
+          leg.id === 'runner'
+        ) {
           leg.stopLoss = entryPrice + beOffsetPoints;
         } else {
           leg.stopLoss = entryPrice - this.config.sl;
@@ -221,7 +225,10 @@ class PositionManager {
           leg.takeProfit = entryPrice - this.config.tp;
         }
 
-        if (this.position.beAdjusted) {
+        if (
+          this.position.beAdjusted &&
+          leg.id === 'runner'
+        ) {
           leg.stopLoss = entryPrice - beOffsetPoints;
         } else {
           leg.stopLoss = entryPrice + this.config.sl;
@@ -401,20 +408,6 @@ class PositionManager {
     this.position.maxFavorable = Math.max(this.position.maxFavorable, move);
     this.position.maxAdverse = Math.min(this.position.maxAdverse, move);
 
-    const beTriggerPoints = Number(this.config.beTriggerPoints || 40);
-    const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
-
-    if (!this.position.beAdjusted && move >= beTriggerPoints) {
-      for (const leg of this.position.legs) {
-        leg.stopLoss =
-          this.position.side === 'LONG'
-            ? this.position.entryPrice + beOffsetPoints
-            : this.position.entryPrice - beOffsetPoints;
-      }
-
-      this.position.beAdjusted = true;
-      console.log(`🔒 MOVE SL TO BE+${beOffsetPoints} | Trigger=${beTriggerPoints}pts | Source=${source}`);
-    }
 
     for (const leg of [...this.position.legs]) {
       if (!this.position) return;
@@ -485,20 +478,6 @@ class PositionManager {
     this.position.maxFavorable = Math.max(this.position.maxFavorable, barMove);
     this.position.maxAdverse = Math.min(this.position.maxAdverse, barMove);
 
-    const beTriggerPoints = Number(this.config.beTriggerPoints || 40);
-    const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
-
-    if (!this.position.beAdjusted && barMove >= beTriggerPoints) {
-      for (const leg of this.position.legs) {
-        leg.stopLoss =
-          this.position.side === 'LONG'
-            ? this.position.entryPrice + beOffsetPoints
-            : this.position.entryPrice - beOffsetPoints;
-      }
-
-      this.position.beAdjusted = true;
-      console.log(`🔒 MOVE SL TO BE+${beOffsetPoints} | Trigger=${beTriggerPoints}pts | Source=BAR`);
-    }
 
     for (const leg of [...this.position.legs]) {
       if (!this.position) return;
@@ -585,10 +564,25 @@ class PositionManager {
 
     if (leg.id === 'fixed' && reason.includes('_TP_')) {
       const runner = this.position.legs.find((l) => l.id === 'runner');
+      const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
 
-      if (runner && runner.active && this.config.trailRunner) {
-        runner.trailing = true;
-        console.log('🏃 Runner trailing activated after fixed TP');
+      if (runner && runner.active) {
+        runner.stopLoss =
+          this.position.side === 'LONG'
+            ? this.position.entryPrice + beOffsetPoints
+            : this.position.entryPrice - beOffsetPoints;
+
+        this.position.beAdjusted = true;
+        this.position.runnerBeActivated = true;
+
+        console.log(
+          `🔒 RUNNER MOVE SL TO BE+${beOffsetPoints} AFTER FIXED TP`
+        );
+
+        if (this.config.trailRunner) {
+          runner.trailing = true;
+          console.log('🏃 Runner trailing activated after fixed TP');
+        }
       }
     }
 
