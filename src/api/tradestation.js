@@ -468,6 +468,81 @@ class TradeStationAPI {
       `/brokerage/accounts/${accountId}/balances`
     );
   }
+
+  // ============================================================
+  // BROKER SNAPSHOT (AUTHORITATIVE STATE)
+  // ============================================================
+
+  async getBrokerSnapshot(accountId, symbol = null) {
+    try {
+      const [positionsRes, balancesRes] = await Promise.all([
+        this.getOpenPositions(accountId),
+        this.getAccountBalances(accountId)
+      ]);
+
+      const positions = positionsRes?.Positions || [];
+      const balances = balancesRes?.Balances || [];
+
+      let brokerPosition = null;
+
+      if (symbol) {
+        brokerPosition = positions.find(
+          (p) =>
+            p.Symbol === symbol ||
+            p.Symbol?.replace('@', '') === symbol?.replace('@', '')
+        );
+      }
+
+      const qty = Number(brokerPosition?.Quantity || 0);
+
+      return {
+        timestamp: new Date().toISOString(),
+        symbol,
+        rawPositions: positions,
+        rawBalances: balances,
+        brokerPosition,
+        qty,
+        side:
+          qty > 0
+            ? 'LONG'
+            : qty < 0
+              ? 'SHORT'
+              : 'FLAT',
+        avgPrice: brokerPosition?.AveragePrice
+          ? Number(brokerPosition.AveragePrice)
+          : null,
+        unrealizedPnL:
+          brokerPosition?.UnrealizedProfitLoss != null
+            ? Number(brokerPosition.UnrealizedProfitLoss)
+            : null,
+        realizedPnL:
+          balances[0]?.RealizedProfitLoss != null
+            ? Number(balances[0].RealizedProfitLoss)
+            : null,
+        todaysPnL:
+          balances[0]?.TodaysProfitLoss != null
+            ? Number(balances[0].TodaysProfitLoss)
+            : null
+      };
+    } catch (err) {
+      console.error('❌ Failed to fetch broker snapshot:', err.message);
+
+      return {
+        timestamp: new Date().toISOString(),
+        symbol,
+        rawPositions: [],
+        rawBalances: [],
+        brokerPosition: null,
+        qty: 0,
+        side: 'FLAT',
+        avgPrice: null,
+        unrealizedPnL: null,
+        realizedPnL: null,
+        todaysPnL: null,
+        error: err.message
+      };
+    }
+  }
 }
 
 module.exports = TradeStationAPI;

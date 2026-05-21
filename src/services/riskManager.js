@@ -11,6 +11,7 @@ class RiskManager {
     this.maxConsecutiveLosses = Number(maxConsecutiveLosses || 5);
 
     this.dailyPnL = 0;
+    this.localDailyPnL = 0;
     this.brokerDailyPnL = 0;
     this.brokerRealizedPnL = 0;
     this.brokerUnrealizedPnL = 0;
@@ -25,6 +26,7 @@ class RiskManager {
     if (this.currentTradeDate !== tradeDate) {
       this.currentTradeDate = tradeDate;
       this.dailyPnL = 0;
+      this.localDailyPnL = 0;
       this.brokerDailyPnL = 0;
       this.brokerRealizedPnL = 0;
       this.brokerUnrealizedPnL = 0;
@@ -36,12 +38,28 @@ class RiskManager {
     }
   }
 
-  recordTradePnL(dollarPnL) {
-    this.dailyPnL += dollarPnL;
+  recordTradePnL(brokerPnL) {
+    const normalizedBrokerPnL = Number.isFinite(brokerPnL)
+      ? Number(brokerPnL)
+      : 0;
 
-    if (dollarPnL < 0) {
+    // Preserve local historical compatibility while
+    // transitioning to broker-authoritative accounting.
+    this.localDailyPnL = this.dailyPnL;
+
+    // Broker PnL is now authoritative.
+    this.dailyPnL = normalizedBrokerPnL;
+    this.brokerDailyPnL = normalizedBrokerPnL;
+
+    const pnlDelta = this.dailyPnL - this.localDailyPnL;
+
+    console.log(
+      `💰 BROKER PnL UPDATE | BrokerDaily=$${this.dailyPnL.toFixed(2)} | Delta=$${pnlDelta.toFixed(2)}`
+    );
+
+    if (pnlDelta < 0) {
       this.consecutiveLosses += 1;
-    } else {
+    } else if (pnlDelta > 0) {
       this.consecutiveLosses = 0;
     }
 
@@ -51,7 +69,10 @@ class RiskManager {
       this.consecutiveLosses >= this.maxConsecutiveLosses
     ) {
       this.tradingDisabled = true;
-      console.log(`🛑 ${this.maxConsecutiveLosses} CONSECUTIVE LOSSES — TRADING DISABLED`);
+
+      console.log(
+        `🛑 ${this.maxConsecutiveLosses} CONSECUTIVE LOSSES — TRADING DISABLED`
+      );
     }
 
     if (
@@ -60,8 +81,9 @@ class RiskManager {
       this.dailyPnL <= -this.maxDailyLoss
     ) {
       this.tradingDisabled = true;
+
       console.log(
-        `🚨 LOCAL DAILY LOSS LIMIT HIT | DailyPnL=$${this.dailyPnL.toFixed(2)} | Limit=$${this.maxDailyLoss}`
+        `🚨 BROKER DAILY LOSS LIMIT HIT | BrokerDailyPnL=$${this.dailyPnL.toFixed(2)} | Limit=$${this.maxDailyLoss}`
       );
     }
 
@@ -77,20 +99,19 @@ class RiskManager {
     this.brokerRealizedPnL = brokerRealizedPnL;
     this.brokerUnrealizedPnL = brokerOpenPnL;
 
-    // Keep local dailyPnL as the bot's source of truth for strategy/session exits.
-    // Broker values are used as additional visibility and safety checks.
-    const localExposure = this.dailyPnL + this.brokerUnrealizedPnL;
+    // Broker is now authoritative for financial exposure.
+    this.dailyPnL = brokerDailyPnL;
+
     const brokerExposure = brokerDailyPnL + brokerOpenPnL;
-    const worstExposure = Math.min(localExposure, brokerExposure);
 
     if (
       this.enableDailyLossLimit &&
       this.maxDailyLoss > 0 &&
-      worstExposure <= -this.maxDailyLoss
+      brokerExposure <= -this.maxDailyLoss
     ) {
       this.tradingDisabled = true;
       console.log(
-        `🚨 DAILY LOSS BREACH | LocalExposure=$${localExposure.toFixed(2)} | BrokerExposure=$${brokerExposure.toFixed(2)} | Limit=$${this.maxDailyLoss}`
+        `🚨 BROKER DAILY LOSS BREACH | BrokerExposure=$${brokerExposure.toFixed(2)} | Limit=$${this.maxDailyLoss}`
       );
     }
 
@@ -130,6 +151,7 @@ class RiskManager {
   getState() {
     return {
       dailyPnL: this.dailyPnL,
+      localDailyPnL: this.localDailyPnL,
       brokerDailyPnL: this.brokerDailyPnL,
       brokerRealizedPnL: this.brokerRealizedPnL,
       brokerUnrealizedPnL: this.brokerUnrealizedPnL,

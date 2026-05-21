@@ -8,32 +8,81 @@ class TradeLogger {
   }
 
   logTrade(entry, exit, reason) {
-    const pnlPoints =
+    const estimatedPnLPoints =
       entry.side === 'LONG'
         ? exit.price - entry.entryPrice
         : entry.entryPrice - exit.price;
 
     const tradeQty = exit.qty || entry.qty || 1;
-    const dollarPnL = pnlPoints * tradeQty * this.pointValue;
 
-    const row = `${new Date().toISOString()},${entry.side},${entry.entryPrice},${exit.price},${reason},${tradeQty},${pnlPoints},${dollarPnL}\n`;
+    // Local math retained only for diagnostics/backtesting visibility.
+    const estimatedDollarPnL =
+      estimatedPnLPoints * tradeQty * this.pointValue;
+
+    const brokerSnapshot = exit.brokerSnapshot || {};
+
+    const brokerRealizedPnL =
+      brokerSnapshot.realizedPnL != null
+        ? Number(brokerSnapshot.realizedPnL)
+        : null;
+
+    const brokerTodaysPnL =
+      brokerSnapshot.todaysPnL != null
+        ? Number(brokerSnapshot.todaysPnL)
+        : null;
+
+    const brokerUnrealizedPnL =
+      brokerSnapshot.unrealizedPnL != null
+        ? Number(brokerSnapshot.unrealizedPnL)
+        : null;
+
+    const brokerQty =
+      brokerSnapshot.qty != null
+        ? Number(brokerSnapshot.qty)
+        : null;
+
+    const brokerAvgPrice =
+      brokerSnapshot.avgPrice != null
+        ? Number(brokerSnapshot.avgPrice)
+        : null;
+
+    const row = [
+      new Date().toISOString(),
+      entry.side,
+      entry.entryPrice,
+      exit.price,
+      reason,
+      tradeQty,
+      estimatedPnLPoints,
+      estimatedDollarPnL,
+      brokerRealizedPnL,
+      brokerTodaysPnL,
+      brokerUnrealizedPnL,
+      brokerQty,
+      brokerAvgPrice
+    ].join(',') + '\n';
 
     if (!fs.existsSync(this.journalPath)) {
       fs.writeFileSync(
         this.journalPath,
-        'timestamp,side,entry,exit,reason,qty,pnlPoints,pnlDollars\n'
+        'timestamp,side,entry,exit,reason,qty,estimatedPnLPoints,estimatedPnLDollars,brokerRealizedPnL,brokerTodaysPnL,brokerUnrealizedPnL,brokerQty,brokerAvgPrice\n'
       );
     }
 
     fs.appendFileSync(this.journalPath, row);
 
     console.log(
-      `📒 Trade Logged | ${reason} | Qty=${tradeQty} | Points=${pnlPoints.toFixed(2)} | PnL=$${dollarPnL.toFixed(2)}`
+      `📒 Trade Logged | ${reason} | Qty=${tradeQty} | EstPoints=${estimatedPnLPoints.toFixed(2)} | EstPnL=$${estimatedDollarPnL.toFixed(2)} | BrokerDaily=$${brokerTodaysPnL != null ? brokerTodaysPnL.toFixed(2) : 'N/A'}`
     );
 
     return {
-      pnlPoints,
-      dollarPnL,
+      estimatedPnLPoints,
+      estimatedDollarPnL,
+      brokerRealizedPnL,
+      brokerTodaysPnL,
+      brokerUnrealizedPnL,
+      brokerQty,
+      brokerAvgPrice,
       qty: tradeQty
     };
   }

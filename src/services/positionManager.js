@@ -6,6 +6,8 @@ class PositionManager {
     this.tradeLogger = tradeLogger;
     this.position = null;
     this.lastKnownPrice = null;
+    this.lastBrokerSnapshot = null;
+    this.lastBrokerQty = 0;
   }
 
   hasPosition() {
@@ -14,6 +16,18 @@ class PositionManager {
 
   getPosition() {
     return this.position;
+  }
+
+  async getBrokerSnapshot() {
+    const snapshot = await this.tsApi.getBrokerSnapshot(
+      this.config.accountId,
+      this.config.symbol
+    );
+
+    this.lastBrokerSnapshot = snapshot;
+    this.lastBrokerQty = Number(snapshot?.qty || 0);
+
+    return snapshot;
   }
 
   getOpenQty() {
@@ -177,9 +191,51 @@ class PositionManager {
 
       if (this.position.side === side && absQty < localOpenQty) {
         console.log(
-          `🔄 Broker qty reduced during sync | LocalOpenQty=${localOpenQty} BrokerQty=${absQty}. Preserving existing legs.`
+          `🔄 Broker qty reduced during sync | LocalOpenQty=${localOpenQty} BrokerQty=${absQty}`
         );
+
+        const fixedLeg = this.position.legs.find(
+          (l) => l.id === 'fixed'
+        );
+
+        const runnerLeg = this.position.legs.find(
+          (l) => l.id === 'runner'
+        );
+
+        const fixedWasClosed = fixedLeg && fixedLeg.active;
+
         this.reconcileOpenQty(absQty, 'BROKER_QTY_REDUCED_SYNC');
+
+        // If qty dropped from 2 -> 1 and the fixed leg closed,
+        // activate BE+offset and trailing on the runner using
+        // broker-confirmed fills instead of price assumptions.
+        if (
+          fixedWasClosed &&
+          runnerLeg &&
+          runnerLeg.active &&
+          absQty === 1 &&
+          !this.position.runnerBeActivated
+        ) {
+          const beOffsetPoints = Number(this.config.beOffsetPoints || 2);
+
+          runnerLeg.stopLoss =
+            this.position.side === 'LONG'
+              ? this.position.entryPrice + beOffsetPoints
+              : this.position.entryPrice - beOffsetPoints;
+
+          this.position.beAdjusted = true;
+          this.position.runnerBeActivated = true;
+
+          console.log(
+            `🔒 BROKER-CONFIRMED FIXED TP | Runner SL moved to BE+${beOffsetPoints}`
+          );
+
+          if (this.config.trailRunner) {
+            runnerLeg.trailing = true;
+            console.log('🏃 Runner trailing activated from broker sync');
+          }
+        }
+
         return;
       }
     }
@@ -238,16 +294,9 @@ class PositionManager {
   }
 
   async flattenBrokerPosition(reason = 'FLATTEN', exitPriceOverride = null) {
-    const brokerData = await this.tsApi.getOpenPositions(this.config.accountId);
-    const positions = brokerData?.Positions || brokerData || [];
+    const snapshot = await this.getBrokerSnapshot();
 
-    const livePos = positions.find(
-      (p) =>
-        p.Symbol === this.config.symbol &&
-        Number(p.Quantity) !== 0
-    );
-
-    const liveQty = livePos ? Number(livePos.Quantity) : 0;
+    const liveQty = Number(snapshot?.qty || 0);
 
     if (liveQty === 0) {
       this.clearPosition(`${reason}_BROKER_ALREADY_FLAT`);
@@ -295,14 +344,9 @@ class PositionManager {
 
     const desiredQty = side === 'LONG' ? this.config.qty : -this.config.qty;
 
-    const brokerData = await this.tsApi.getOpenPositions(this.config.accountId);
-    const positions = brokerData?.Positions || brokerData || [];
+    const snapshot = await this.getBrokerSnapshot();
 
-    const currentPos = positions.find(
-      (p) => p.Symbol === this.config.symbol
-    );
-
-    const currentQty = currentPos ? Number(currentPos.Quantity) : 0;
+    const currentQty = Number(snapshot?.qty || 0);
     const orderSize = desiredQty - currentQty;
 
     console.log(`🔍 TARGET ENTRY | DesiredQty=${desiredQty} | BrokerQty=${currentQty} | OrderSize=${orderSize}`);
@@ -351,7 +395,15 @@ class PositionManager {
       'FLIP_EXIT'
     );
 
-    const stopped = this.riskManager.recordTradePnL(result.dollarPnL);
+    const snapshotAfterFlipExit = await this.getBrokerSnapshot();
+
+    const brokerPnL = Number(
+      snapshotAfterFlipExit?.realizedPnL ??
+      snapshotAfterFlipExit?.todaysPnL ??
+      0
+    );
+
+    const stopped = this.riskManager.recordTradePnL(brokerPnL);
 
     if (stopped) {
       await this.flattenBrokerPosition('DAILY_LOSS_AFTER_FLIP', price);
@@ -360,14 +412,9 @@ class PositionManager {
 
     const desiredQty = newSide === 'LONG' ? this.config.qty : -this.config.qty;
 
-    const brokerData = await this.tsApi.getOpenPositions(this.config.accountId);
-    const positions = brokerData?.Positions || brokerData || [];
+    const snapshot = await this.getBrokerSnapshot();
 
-    const currentPos = positions.find(
-      (p) => p.Symbol === this.config.symbol
-    );
-
-    const currentQty = currentPos ? Number(currentPos.Quantity) : 0;
+    const currentQty = Number(snapshot?.qty || 0);
     const orderSize = desiredQty - currentQty;
 
     console.log(`🔍 FLIP ORDER | BrokerQty=${currentQty} | DesiredQty=${desiredQty} | OrderSize=${orderSize}`);
@@ -554,13 +601,25 @@ class PositionManager {
       );
     }
 
+    const snapshotBeforeExit = await this.getBrokerSnapshot();
+
     const result = this.tradeLogger.logTrade(
       this.position,
-      { price: exitPrice, qty: leg.qty },
+      {
+        price: exitPrice,
+        qty: leg.qty,
+        brokerSnapshot: snapshotBeforeExit
+      },
       reason
     );
 
-    this.riskManager.recordTradePnL(result.dollarPnL);
+    const brokerPnL = Number(
+      snapshotBeforeExit?.realizedPnL ??
+      snapshotBeforeExit?.todaysPnL ??
+      0
+    );
+
+    this.riskManager.recordTradePnL(brokerPnL);
 
     if (leg.id === 'fixed' && reason.includes('_TP_')) {
       const runner = this.position.legs.find((l) => l.id === 'runner');

@@ -170,13 +170,6 @@ app.use('/api', createDashboardApi({
     console.log(
       `🔐 PROFIT LOCK ${enabled ? 'ENABLED' : 'DISABLED'} FROM DASHBOARD`
     );
-  },
-  toggleProfitLock: (enabled) => {
-    profitLockEnabledRuntime = enabled;
-
-    console.log(
-      `🔐 PROFIT LOCK ${enabled ? 'ENABLED' : 'DISABLED'} FROM DASHBOARD`
-    );
   }
 }));
 
@@ -185,14 +178,89 @@ let lastFinalizedMinute = null;
 
 // ================= HELPERS =================
 async function getLiveBrokerPosition() {
-  const brokerData = await tsApi.getOpenPositions(CONFIG.accountId);
-  const positions = brokerData?.Positions || brokerData || [];
-
-  return positions.find(
-    (p) =>
-      p.Symbol === CONFIG.symbol &&
-      Number(p.Quantity) !== 0
+  const snapshot = await tsApi.getBrokerSnapshot(
+    CONFIG.accountId,
+    CONFIG.symbol
   );
+
+  return snapshot?.brokerPosition || null;
+}
+
+async function performBrokerReconciliationCycle() {
+  try {
+    const snapshot = await tsApi.getBrokerSnapshot(
+      CONFIG.accountId,
+      CONFIG.symbol
+    );
+
+    const brokerQty = Number(snapshot?.qty || 0);
+    const brokerSide = snapshot?.side || 'FLAT';
+
+    // Continuously feed authoritative broker PnL into risk manager.
+    riskManager.updateBrokerPnL({
+      dailyPnL:
+        snapshot?.todaysPnL ??
+        snapshot?.realizedPnL ??
+        0,
+      realizedPnL:
+        snapshot?.realizedPnL ?? 0,
+      unrealizedPnL:
+        snapshot?.unrealizedPnL ?? 0
+    });
+
+    // Hard flatten reconciliation.
+    if (brokerQty === 0 && positionManager.hasPosition()) {
+      console.log('🧹 BROKER RECONCILIATION | Broker flat detected — clearing local position');
+
+      positionManager.clearPosition('BROKER_RECONCILIATION_FLAT');
+      return;
+    }
+
+    // Broker has a position but local bot does not.
+    if (brokerQty !== 0 && !positionManager.hasPosition()) {
+      console.log(
+        `🔄 BROKER RECONCILIATION | Adopting broker ${brokerSide} ${Math.abs(brokerQty)}`
+      );
+
+      positionManager.syncFromBrokerPosition(snapshot.brokerPosition);
+      return;
+    }
+
+    if (!positionManager.hasPosition()) {
+      return;
+    }
+
+    const localPosition = positionManager.getPosition();
+    const localSide = localPosition?.side;
+
+    const localQty = typeof positionManager.getOpenQty === 'function'
+      ? positionManager.getOpenQty()
+      : Number(localPosition?.qty || 0);
+
+    // Side mismatch reconciliation.
+    if (
+      brokerQty !== 0 &&
+      localSide !== brokerSide
+    ) {
+      console.log(
+        `⚠️ BROKER SIDE MISMATCH | Local=${localSide} Broker=${brokerSide}`
+      );
+
+      positionManager.syncFromBrokerPosition(snapshot.brokerPosition);
+      return;
+    }
+
+    // Qty mismatch reconciliation.
+    if (Math.abs(brokerQty) !== localQty) {
+      console.log(
+        `⚠️ BROKER QTY MISMATCH | Local=${localQty} Broker=${Math.abs(brokerQty)}`
+      );
+
+      positionManager.syncFromBrokerPosition(snapshot.brokerPosition);
+    }
+  } catch (err) {
+    console.error('⚠️ Broker reconciliation cycle failed:', err.message);
+  }
 }
 
 async function checkProfitLock({ realizedPnL = 0, unrealizedPnL = 0 }) {
@@ -284,81 +352,6 @@ async function updateBrokerPnLAndEnforceRisk() {
   }
 }
 
-async function reconcileBrokerPosition() {
-  try {
-    const livePos = await getLiveBrokerPosition();
-
-    if (!livePos && positionManager.hasPosition()) {
-      console.log('⚠️ Broker shows FLAT — clearing internal position');
-      positionManager.clearPosition('BROKER_FLAT_RECONCILE');
-      return;
-    }
-
-    if (!livePos) return;
-
-    const brokerQty = Number(livePos.Quantity || 0);
-    const brokerSide = brokerQty > 0 ? 'LONG' : 'SHORT';
-    const absBrokerQty = Math.abs(brokerQty);
-
-    // If bot has no internal position but broker does, adopt it.
-    // This covers manual entries or bot restart while a position is open.
-    if (!positionManager.hasPosition()) {
-      console.log(`🔄 No local position but broker has ${brokerSide} ${absBrokerQty} — adopting broker position`);
-      positionManager.syncFromBrokerPosition(livePos);
-      return;
-    }
-
-    const localPosition = positionManager.getPosition();
-    const localSide = localPosition?.side;
-    const localOpenQty = typeof positionManager.getOpenQty === 'function'
-      ? positionManager.getOpenQty()
-      : Math.abs(
-          (localPosition?.legs || [])
-            .filter((leg) => !leg.closed)
-            .reduce((sum, leg) => sum + Number(leg.qty || 0), 0)
-        );
-
-    // If side changed, broker and bot are out of sync. Re-adopt broker state.
-    if (localSide !== brokerSide) {
-      console.log(
-        `⚠️ Broker side mismatch | Local=${localSide} Broker=${brokerSide}. Re-syncing from broker.`
-      );
-      positionManager.syncFromBrokerPosition(livePos);
-      return;
-    }
-
-    // If broker qty matches remaining open internal legs, preserve the current
-    // leg/runner state, but still allow the broker average fill price to sync.
-    if (absBrokerQty === localOpenQty) {
-      positionManager.syncFromBrokerPosition(livePos);
-      return;
-    }
-
-    // If broker qty is lower than local qty, mark closed legs without recreating full position.
-    if (absBrokerQty < localOpenQty) {
-      console.log(
-        `🔄 Broker qty reduced | LocalOpenQty=${localOpenQty} BrokerQty=${absBrokerQty}. Preserving runner state.`
-      );
-
-      if (typeof positionManager.reconcileOpenQty === 'function') {
-        positionManager.reconcileOpenQty(absBrokerQty, 'BROKER_QTY_REDUCED');
-      }
-
-      return;
-    }
-
-    // If broker qty is higher than local qty, something manual happened.
-    // Re-adopt to avoid under-managing risk.
-    if (absBrokerQty > localOpenQty) {
-      console.log(
-        `⚠️ Broker qty greater than local | LocalOpenQty=${localOpenQty} BrokerQty=${absBrokerQty}. Re-syncing from broker.`
-      );
-      positionManager.syncFromBrokerPosition(livePos);
-    }
-  } catch (err) {
-    console.error('⚠️ Broker reconciliation failed:', err.message);
-  }
-}
 
 function getChicagoTimeParts(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -532,7 +525,7 @@ async function handleStreamBar(tick) {
   strategy.addBar(closedBar);
 
   await updateBrokerPnLAndEnforceRisk();
-  await reconcileBrokerPosition();
+  await performBrokerReconciliationCycle();
 
   // Bar-based exits are only used when tick execution is disabled.
   // With USE_TICK_EXECUTION=true, quote/tick exits manage TP/SL intrabar.
@@ -643,13 +636,31 @@ async function startBot() {
     console.log('✅ Authenticated with TradeStation');
 
     try {
-      const livePos = await getLiveBrokerPosition();
+      const snapshot = await tsApi.getBrokerSnapshot(
+        CONFIG.accountId,
+        CONFIG.symbol
+      );
 
-      if (livePos) {
-        positionManager.syncFromBrokerPosition(livePos);
+      if (snapshot?.qty) {
+        console.log(
+          `🔄 STARTUP BROKER SYNC | ${snapshot.side} ${Math.abs(snapshot.qty)} @ ${snapshot.avgPrice}`
+        );
+
+        positionManager.syncFromBrokerPosition(snapshot.brokerPosition);
       } else {
         console.log('🟢 No open broker position detected — starting flat');
       }
+
+      riskManager.updateBrokerPnL({
+        dailyPnL:
+          snapshot?.todaysPnL ??
+          snapshot?.realizedPnL ??
+          0,
+        realizedPnL:
+          snapshot?.realizedPnL ?? 0,
+        unrealizedPnL:
+          snapshot?.unrealizedPnL ?? 0
+      });
     } catch (err) {
       console.error('⚠️ Failed to sync broker positions:', err.message);
     }
@@ -666,6 +677,21 @@ async function startBot() {
   }
 
   console.log('🚀 Starting MNQ Bot...');
+
+  // ============================================================
+  // PERIODIC BROKER RECONCILIATION LOOP
+  // ============================================================
+
+  setInterval(async () => {
+    try {
+      await performBrokerReconciliationCycle();
+    } catch (err) {
+      console.error(
+        '⚠️ Periodic broker reconciliation failed:',
+        err.message
+      );
+    }
+  }, 3000);
 
   await notifier.sendBotStarted({
     symbol: CONFIG.symbol,
