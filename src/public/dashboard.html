@@ -97,7 +97,11 @@
       border-color: rgba(53, 208, 127, 0.35);
       background: rgba(53, 208, 127, 0.1);
     }
-
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(255, 204, 102, 0.35);
+      background: rgba(255, 204, 102, 0.1);
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(12, 1fr);
@@ -413,7 +417,20 @@
 
         <div id="positionMain" class="metric">Flat</div>
         <div id="positionSub" class="muted small">No open broker position detected</div>
+        <div class="row">
+          <span class="muted">Broker Qty</span>
+          <span id="brokerQty" class="value">--</span>
+        </div>
 
+        <div class="row">
+          <span class="muted">Broker Avg Entry</span>
+          <span id="brokerAvgEntry" class="value">--</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">Sync Status</span>
+          <span id="syncStatus" class="value good-text">SYNCED</span>
+        </div>
         <div class="actions">
           <button class="danger" onclick="flattenPosition()">Flatten</button>
           <button onclick="loadPositions()">Reload</button>
@@ -441,6 +458,10 @@
         <div class="row">
           <span class="muted">Commission</span>
           <span id="commission" class="value">--</span>
+        </div>
+        <div class="row">
+          <span class="muted">Broker Snapshot</span>
+          <span id="brokerSnapshotTime" class="value">--</span>
         </div>
       </div>
 
@@ -507,9 +528,12 @@
       <div class="card span-6">
         <div class="card-title">
           <span>Risk State</span>
-          <span class="muted">Local bot</span>
+          <span class="muted">Broker-authoritative</span>
         </div>
-
+        <div class="row">
+          <span class="muted">Sync Status</span>
+          <span id="riskSyncStatus" class="value">--</span>
+        </div>
         <div class="row">
           <span class="muted">Daily P/L</span>
           <span id="riskDailyPnl" class="value">--</span>
@@ -545,6 +569,7 @@
     const API_BASE = window.location.origin;
 
     const state = {
+      lastToastMessage: null,
       apiKey: localStorage.getItem('mnqBotApiKey') || '',
       controlToken: localStorage.getItem('mnqBotControlToken') || ''
     };
@@ -582,12 +607,24 @@
     }
 
     function showToast(message) {
+      // Prevent repeated spam toasts during API hiccups.
+      if (state.lastToastMessage === message) {
+        return;
+      }
+
+      state.lastToastMessage = message;
+
       const toast = $('toast');
       toast.textContent = message;
       toast.classList.add('show');
 
       setTimeout(() => {
         toast.classList.remove('show');
+
+        // Allow future identical messages after cooldown.
+        if (state.lastToastMessage === message) {
+          state.lastToastMessage = null;
+        }
       }, 3500);
     }
 
@@ -682,6 +719,7 @@
       const bot = live.bot || {};
       const risk = live.risk || {};
       const localPosition = live.localPosition || null;
+      const brokerPosition = live.brokerPosition || null;
       const market = live.market || {};
 
       setText('symbol', bot.symbol || '--');
@@ -740,18 +778,86 @@
       riskStatusBadge.className =
         `badge ${riskDisabledReason ? 'red' : 'green'}`;
 
-      if (localPosition) {
-        const side = localPosition.side || '--';
-        const qty = localPosition.qty ?? '--';
-        const entry = localPosition.entryPrice ?? '--';
+      if (brokerPosition) {
+        const brokerQty = Number(brokerPosition.Quantity || 0);
+        const brokerSide = brokerQty > 0 ? 'LONG' : 'SHORT';
+        const brokerAbsQty = Math.abs(brokerQty);
 
-        setText('positionMain', `${side} ${qty}`);
-        setText('positionSub', `Local position · Entry ${price(entry)}`);
-        setText('positionPill', side);
-        $('positionPill').className = side === 'LONG' ? 'pill good' : 'pill warn-text';
+        const brokerAvgPrice =
+          brokerPosition.AveragePrice ||
+          brokerPosition.AvgPrice ||
+          '--';
+
+        setText('positionMain', `${brokerSide} ${brokerAbsQty}`);
+
+        setText(
+          'positionSub',
+          `Broker-authoritative position · Avg ${price(brokerAvgPrice)}`
+        );
+
+        setText('positionPill', brokerSide);
+
+        $('positionPill').className =
+          brokerSide === 'LONG'
+            ? 'pill good'
+            : 'pill warn';
+
+        setText('brokerQty', brokerAbsQty);
+        setText('brokerAvgEntry', price(brokerAvgPrice));
+
+        setText('syncStatus', 'SYNCED');
+        $('syncStatus').className = 'value good-text';
+
+      } else {
+        setText('positionMain', 'Flat');
+        setText('positionSub', 'No open broker position detected');
+        setText('positionPill', 'Flat');
+
+        $('positionPill').className = 'pill';
+
+        setText('brokerQty', '--');
+        setText('brokerAvgEntry', '--');
+
+        setText('syncStatus', 'BROKER FLAT');
+        $('syncStatus').className = 'value muted';
       }
 
-      setText('updatedAt', new Date(live.timestamp).toLocaleTimeString());
+      // Detect broker/local desync visually.
+      if (brokerPosition && localPosition) {
+        const localQty = Number(localPosition.qty || 0);
+        const brokerQty = Math.abs(Number(brokerPosition.Quantity || 0));
+
+        if (localQty !== brokerQty) {
+          setText('syncStatus', 'QTY MISMATCH');
+          $('syncStatus').className = 'value warn-text';
+        }
+
+        if (localPosition.side) {
+          const brokerSide =
+            Number(brokerPosition.Quantity || 0) > 0
+              ? 'LONG'
+              : 'SHORT';
+
+        if (localPosition.side !== brokerSide) {
+          setText('syncStatus', 'SIDE MISMATCH');
+          $('syncStatus').className = 'value bad-text';
+          }
+        }
+      }
+
+      setText(
+        'brokerSnapshotTime',
+        live.timestamp
+          ? new Date(live.timestamp).toLocaleTimeString()
+          : '--'
+      );
+
+      setText(
+        'updatedAt',
+        live.timestamp
+          ? new Date(live.timestamp).toLocaleTimeString()
+          : '--'
+      );
     }
 
     async function loadStatus() {
@@ -776,7 +882,6 @@
       setText('consecutiveLosses', risk.consecutiveLosses ?? '--');
       setText('tpSl', `${bot.tp ?? '--'} / ${bot.sl ?? '--'} pts`);
       setText('qty', bot.qty ?? '--');
-
       setText('updatedAt', new Date(status.timestamp).toLocaleTimeString());
     }
 
@@ -800,7 +905,7 @@
       setText('positionMain', `${side} ${Math.abs(qty)}`);
       setText('positionSub', `${p.Symbol || 'NQM26'} · Avg Price ${p.AveragePrice || p.AvgPrice || '--'}`);
       setText('positionPill', side);
-      $('positionPill').className = qty > 0 ? 'pill good' : 'pill warn-text';
+      $('positionPill').className = qty > 0 ? 'pill good' : 'pill warn';
 
       setText('rawPosition', JSON.stringify(list, null, 2));
     }
