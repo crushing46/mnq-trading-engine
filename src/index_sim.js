@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const path = require('path');
+const { resolveTradingMode, persistTradingMode } = require('./services/runtimeConfig');
 
 const TradingStrategy = require('./services/strategy');
 const TradeStationAPI = require('./api/tradestation');
@@ -60,11 +61,16 @@ process.on('uncaughtException', (err) => {
 const PROFIT_LOCK_ENABLED = process.env.PROFIT_LOCK_ENABLED === 'true';
 const MAX_SESSION_PROFIT = Number(process.env.MAX_SESSION_PROFIT || 1500);
 const DASHBOARD_URL = process.env.DASHBOARD_URL || 'http://159.223.113.118:3001/dashboard';
+const ENV_PATH = path.join(__dirname, '..', '.env');
+const initialTradingMode = resolveTradingMode(process.env);
 
 let profitLockTriggered = false;
-let profitLockEnabledRuntime = PROFIT_LOCK_ENABLED
+let profitLockEnabledRuntime = PROFIT_LOCK_ENABLED;
+let pendingModeState = null;
 // ================= CONFIG =================
 const CONFIG = {
+  mode: initialTradingMode.mode,
+  baseUrl: initialTradingMode.baseUrl,
   symbol: normalizeTradeStationSymbol(process.env.SYMBOL),
   qty: Number(process.env.CONTRACT_SIZE || 2),
   tp: Number(process.env.TP_POINTS || 40),
@@ -77,7 +83,6 @@ const CONFIG = {
   enableTrading: process.env.ENABLE_TRADING === 'true',
   trailRunner: process.env.TRAIL_RUNNER === 'true',
   trailDistance: Number(process.env.TRAIL_DISTANCE || 40),
-  accountId: process.env.ACCOUNT_ID,
   maxDailyLoss: Number(process.env.MAX_DAILY_LOSS || 0),
   enableDailyLossLimit: process.env.ENABLE_DAILY_LOSS_LIMIT !== 'false',
   enableConsecutiveLossLimit: process.env.ENABLE_CONSECUTIVE_LOSS_LIMIT !== 'false',
@@ -86,7 +91,8 @@ const CONFIG = {
   enableEodFlatten: process.env.ENABLE_EOD_FLATTEN === 'true',
   eodFlattenHourCt: Number(process.env.EOD_FLATTEN_HOUR_CT || 15),
   eodFlattenMinuteCt: Number(process.env.EOD_FLATTEN_MINUTE_CT || 50),
-  pointValue: Number(process.env.POINT_VALUE || 2)
+  pointValue: Number(process.env.POINT_VALUE || 2),
+  accountId: initialTradingMode.accountId
 };
 
 console.log('🔧 CONFIG:', CONFIG);
@@ -110,7 +116,8 @@ if (!CONFIG.accountId) {
 const tsApi = new TradeStationAPI({
   apiKey: process.env.TS_API_KEY,
   secretKey: process.env.TS_SECRET_KEY,
-  redirectUri: process.env.TS_REDIRECT_URI
+  redirectUri: process.env.TS_REDIRECT_URI,
+  baseUrl: CONFIG.baseUrl
 });
 
 // ================= SERVICES =================
@@ -148,6 +155,72 @@ const notifier = new Notifier({
   pushoverToken: process.env.PUSHOVER_TOKEN
 });
 
+function getModeState() {
+  return {
+    activeMode: CONFIG.mode,
+    activeAccountId: CONFIG.accountId,
+    activeBaseUrl: CONFIG.baseUrl,
+    pendingMode: pendingModeState?.mode || null,
+    pendingAccountId: pendingModeState?.accountId || null,
+    pendingBaseUrl: pendingModeState?.baseUrl || null,
+    restartRequired: Boolean(pendingModeState),
+    availableModes: {
+      SIM: {
+        accountId: initialTradingMode.simAccountId || null,
+        baseUrl: initialTradingMode.simApiUrl
+      },
+      LIVE: {
+        accountId: initialTradingMode.liveAccountId || null,
+        baseUrl: initialTradingMode.liveApiUrl
+      }
+    }
+  };
+}
+
+async function switchTradingMode(nextModeRaw) {
+  const nextMode = String(nextModeRaw || '').trim().toUpperCase();
+
+  if (!['SIM', 'LIVE'].includes(nextMode)) {
+    const err = new Error('Mode must be SIM or LIVE.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const livePosition = await getLiveBrokerPosition();
+
+  if (livePosition || positionManager.hasPosition()) {
+    const err = new Error('Cannot switch modes while a position is open. Flatten the current account first.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const resolvedTargetMode = resolveTradingMode(process.env, nextMode);
+
+  if (!resolvedTargetMode.accountId) {
+    const err = new Error(`Cannot switch to ${nextMode} because its account ID is not configured in .env.`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const targetMode = persistTradingMode(ENV_PATH, nextMode);
+
+  process.env.BOT_MODE = targetMode.mode;
+  process.env.TS_API_BASE_URL = targetMode.baseUrl;
+  process.env.ACCOUNT_ID = targetMode.accountId || '';
+
+  pendingModeState = targetMode.mode === CONFIG.mode
+    ? null
+    : targetMode;
+
+  return {
+    message:
+      pendingModeState
+        ? `${targetMode.mode} mode saved to .env. Restart the bot process to activate it.`
+        : `${targetMode.mode} mode is already active. No restart needed.`,
+    modeState: getModeState()
+  };
+}
+
 app.use('/api', createDashboardApi({
   config: CONFIG,
   tsApi,
@@ -156,6 +229,8 @@ app.use('/api', createDashboardApi({
   tradeLogger,
   strategy,
   getLiveBrokerPosition,
+  getModeState,
+  switchTradingMode,
   getProfitLockState: () => ({
     enabled: profitLockEnabledRuntime,
     triggered: profitLockTriggered,
@@ -677,6 +752,7 @@ async function startBot() {
   }
 
   console.log('🚀 Starting MNQ Bot...');
+  console.log(`🧭 Trading mode active | Mode=${CONFIG.mode} | Account=${CONFIG.accountId} | BaseURL=${CONFIG.baseUrl}`);
 
   // ============================================================
   // PERIODIC BROKER RECONCILIATION LOOP

@@ -334,7 +334,7 @@
         <div class="logo">NQ</div>
         <div>
           <h1>MNQ Bot</h1>
-          <div class="subtitle">TradeStation SIM Remote Dashboard</div>
+          <div id="dashboardSubtitle" class="subtitle">TradeStation Remote Dashboard</div>
         </div>
       </div>
 
@@ -488,6 +488,12 @@
           </button>
         </div>
 
+        <div class="actions" style="margin-top:10px;">
+          <button id="modeSwitchButton" class="warning" onclick="switchTradingMode()">
+            Switch to LIVE
+          </button>
+        </div>
+
         <div class="row">
           <span class="muted">TP / SL</span>
           <span id="tpSl" class="value">--</span>
@@ -515,6 +521,11 @@
         </div>
 
         <div class="row">
+          <span class="muted">Pending Mode</span>
+          <span id="pendingModeBadge" class="badge">--</span>
+        </div>
+
+        <div class="row">
           <span class="muted">Profit Lock Hit</span>
           <span id="profitLockTriggeredBadge" class="badge">--</span>
         </div>
@@ -522,6 +533,11 @@
         <div class="row">
           <span class="muted">Risk Status</span>
           <span id="riskStatusBadge" class="badge">--</span>
+        </div>
+
+        <div class="row">
+          <span class="muted">API Base</span>
+          <span id="apiBaseUrl" class="value">--</span>
         </div>
       </div>
 
@@ -559,7 +575,7 @@
     </section>
 
     <div class="footer">
-      MNQ Trading Bot Dashboard · Keep SIM until every control is fully tested
+      MNQ Trading Bot Dashboard · Mode changes are saved in `.env` and activate after a bot restart
     </div>
   </main>
 
@@ -604,6 +620,32 @@
 
     function setText(id, value) {
       $(id).textContent = value;
+    }
+
+    function setModeState(modeState = {}, fallbackBot = {}) {
+      const activeMode = modeState.activeMode || fallbackBot.mode || 'SIM';
+      const pendingMode = modeState.pendingMode || null;
+      const restartRequired = Boolean(modeState.restartRequired);
+      const activeBaseUrl = modeState.activeBaseUrl || fallbackBot.baseUrl || '--';
+      const nextMode = activeMode === 'LIVE' ? 'SIM' : 'LIVE';
+
+      setText('modePill', activeMode);
+      $('modePill').className = activeMode === 'LIVE' ? 'pill warn' : 'pill good';
+
+      setText(
+        'dashboardSubtitle',
+        `TradeStation ${activeMode} Remote Dashboard${restartRequired ? ' · Restart Pending' : ''}`
+      );
+
+      const pendingModeBadge = $('pendingModeBadge');
+      pendingModeBadge.textContent = pendingMode || 'NONE';
+      pendingModeBadge.className = `badge ${pendingMode ? 'yellow' : 'green'}`;
+
+      setText('apiBaseUrl', activeBaseUrl);
+
+      const modeSwitchButton = $('modeSwitchButton');
+      modeSwitchButton.textContent = `Switch to ${nextMode}`;
+      modeSwitchButton.className = nextMode === 'LIVE' ? 'warning' : 'primary';
     }
 
     function showToast(message) {
@@ -709,7 +751,7 @@
       const health = await apiGet('/api/health');
 
       setText('symbol', health.symbol || '--');
-      setText('modePill', health.mode || 'SIM');
+      setModeState(health.modeState, { mode: health.mode });
       setText('connectionPill', 'Connected');
       $('connectionPill').className = 'pill good';
     }
@@ -721,9 +763,10 @@
       const localPosition = live.localPosition || null;
       const brokerPosition = live.brokerPosition || null;
       const market = live.market || {};
+      const modeState = live.modeState || {};
 
       setText('symbol', bot.symbol || '--');
-      setText('modePill', bot.mode || 'SIM');
+      setModeState(modeState, bot);
       setText('connectionPill', 'Connected');
       $('connectionPill').className = 'pill good';
 
@@ -1025,6 +1068,32 @@
         }
 
         showToast(result.message || 'Profit Lock updated.');
+        await refreshAll();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function switchTradingMode() {
+      const currentMode = $('modePill').textContent.trim() || 'SIM';
+      const nextMode = currentMode === 'LIVE' ? 'SIM' : 'LIVE';
+      const confirmed = confirm(
+        `Save ${nextMode} as the next trading mode? This updates the server .env file. You will still need to restart the bot process before ${nextMode} becomes active.`
+      );
+
+      if (!confirmed) return;
+
+      try {
+        const result = await apiPost('/api/mode', { mode: nextMode });
+
+        if (result.modeState) {
+          setModeState(result.modeState, {
+            mode: result.modeState.activeMode,
+            baseUrl: result.modeState.activeBaseUrl
+          });
+        }
+
+        showToast(result.message || `Saved ${nextMode} mode.`);
         await refreshAll();
       } catch (err) {
         showToast(err.message);

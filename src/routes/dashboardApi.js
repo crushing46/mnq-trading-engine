@@ -51,6 +51,8 @@ function createDashboardApi({
   tradeLogger,
   strategy,
   getLiveBrokerPosition,
+  getModeState,
+  switchTradingMode,
   toggleProfitLock,
   getProfitLockState
 }) {
@@ -64,7 +66,11 @@ function createDashboardApi({
       ok: true,
       status: 'alive',
       timestamp: new Date().toISOString(),
-      mode: process.env.BOT_MODE || 'SIM',
+      mode: config.mode || 'SIM',
+      modeState:
+        typeof getModeState === 'function'
+          ? getModeState()
+          : null,
       symbol: config.symbol,
       accountId: config.accountId,
       enableTrading: config.enableTrading,
@@ -86,9 +92,10 @@ function createDashboardApi({
         ok: true,
         timestamp: new Date().toISOString(),
         bot: {
-          mode: process.env.BOT_MODE || 'SIM',
+          mode: config.mode || 'SIM',
           symbol: config.symbol,
           accountId: config.accountId,
+          baseUrl: config.baseUrl,
           enableTrading: config.enableTrading,
           useTickExecution: config.useTickExecution,
           trailRunner: config.trailRunner,
@@ -102,6 +109,10 @@ function createDashboardApi({
         market: {
           lastKnownPrice: positionManager.lastKnownPrice ?? null
         },
+        modeState:
+          typeof getModeState === 'function'
+            ? getModeState()
+            : null,
         localPosition,
         risk: riskState,
         profitLock:
@@ -131,9 +142,10 @@ function createDashboardApi({
         ok: true,
         timestamp: new Date().toISOString(),
         bot: {
-          mode: process.env.BOT_MODE || 'SIM',
+          mode: config.mode || 'SIM',
           symbol: config.symbol,
           accountId: config.accountId,
+          baseUrl: config.baseUrl,
           enableTrading: config.enableTrading,
           useTickExecution: config.useTickExecution,
           trailRunner: config.trailRunner,
@@ -144,6 +156,10 @@ function createDashboardApi({
           beOffsetPoints: config.beOffsetPoints,
           qty: config.qty
         },
+        modeState:
+          typeof getModeState === 'function'
+            ? getModeState()
+            : null,
         localPosition,
         risk: riskState,
         profitLock:
@@ -213,6 +229,46 @@ function createDashboardApi({
         ok: false,
         error: err.message,
         response: err?.response?.data
+      });
+    }
+  });
+
+  router.get('/mode', (req, res) => {
+    if (typeof getModeState !== 'function') {
+      return res.status(500).json({
+        ok: false,
+        error: 'Mode state is not available.'
+      });
+    }
+
+    res.json({
+      ok: true,
+      timestamp: new Date().toISOString(),
+      modeState: getModeState()
+    });
+  });
+
+  router.post('/mode', requireControlToken, async (req, res) => {
+    try {
+      if (typeof switchTradingMode !== 'function') {
+        return res.status(500).json({
+          ok: false,
+          error: 'Trading mode switching is not available.'
+        });
+      }
+
+      const nextMode = req.body?.mode;
+      const result = await switchTradingMode(nextMode);
+
+      res.json({
+        ok: true,
+        timestamp: new Date().toISOString(),
+        ...result
+      });
+    } catch (err) {
+      res.status(err?.statusCode || 500).json({
+        ok: false,
+        error: err.message
       });
     }
   });

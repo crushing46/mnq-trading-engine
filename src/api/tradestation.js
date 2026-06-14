@@ -33,6 +33,11 @@ class TradeStationAPI {
     this.loadTokens();
   }
 
+  setBaseUrl(baseUrl) {
+    if (!baseUrl) return;
+    this.baseUrl = baseUrl;
+  }
+
   // ============================================================
   // TOKEN MANAGEMENT
   // ============================================================
